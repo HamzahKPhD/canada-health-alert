@@ -14,7 +14,81 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      review_documents: {
+        Row: {
+          control_number: string | null
+          created_at: string
+          date_filed: string | null
+          decision_date: string | null
+          din: string | null
+          first_seen_at: string
+          id: string
+          issued_date: string | null
+          manufacturer: string | null
+          product_type: string | null
+          submission_type: string | null
+          title: string
+          updated_date: string | null
+          url: string
+        }
+        Insert: {
+          control_number?: string | null
+          created_at?: string
+          date_filed?: string | null
+          decision_date?: string | null
+          din?: string | null
+          first_seen_at?: string
+          id?: string
+          issued_date?: string | null
+          manufacturer?: string | null
+          product_type?: string | null
+          submission_type?: string | null
+          title: string
+          updated_date?: string | null
+          url: string
+        }
+        Update: {
+          control_number?: string | null
+          created_at?: string
+          date_filed?: string | null
+          decision_date?: string | null
+          din?: string | null
+          first_seen_at?: string
+          id?: string
+          issued_date?: string | null
+          manufacturer?: string | null
+          product_type?: string | null
+          submission_type?: string | null
+          title?: string
+          updated_date?: string | null
+          url?: string
+        }
+        Relationships: []
+      }
+      scan_log: {
+        Row: {
+          id: string
+          new_documents_count: number
+          scanned_at: string
+          status: string
+          total_documents_count: number
+        }
+        Insert: {
+          id?: string
+          new_documents_count?: number
+          scanned_at?: string
+          status?: string
+          total_documents_count?: number
+        }
+        Update: {
+          id?: string
+          new_documents_count?: number
+          scanned_at?: string
+          status?: string
+          total_documents_count?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
