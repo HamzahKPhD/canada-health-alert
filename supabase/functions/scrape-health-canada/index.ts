@@ -6,7 +6,7 @@ const corsHeaders = {
 };
 
 const BASE_URL = 'https://dhpp.hpfb-dgpsa.ca/review-documents';
-const PAGES_TO_SCRAPE = 5; // Scrape first 5 pages (most recent ~100 documents)
+const PAGES_TO_SCRAPE = 3;
 
 interface ReviewDocument {
   title: string;
@@ -28,99 +28,47 @@ function parseDate(dateStr: string | null): string | null {
   return match ? match[1] : null;
 }
 
+function extractField(block: string, labelClass: string): string | null {
+  // Match: <span class="views-label views-label-{labelClass}">...</span><span class="field-content">VALUE</span>
+  const regex = new RegExp(
+    `views-label-${labelClass}">[^<]*</span>\\s*<span class="field-content">([^<]*)</span>`,
+    'i'
+  );
+  const m = block.match(regex);
+  return m ? m[1].trim() || null : null;
+}
+
 function parseDocumentsFromHtml(html: string): ReviewDocument[] {
   const documents: ReviewDocument[] = [];
-  
-  // Match each search result item
-  const resultPattern = /<article[^>]*class="[^"]*search-result[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
-  let match;
-  
-  while ((match = resultPattern.exec(html)) !== null) {
-    const block = match[1];
-    
-    // Extract title and URL
-    const titleMatch = block.match(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i);
+
+  // Split by review-document divs
+  const parts = html.split(/<div class="review-document views-row/);
+
+  for (let i = 1; i < parts.length; i++) {
+    const block = parts[i];
+
+    // Extract title and URL from the link
+    const titleMatch = block.match(/<a href="(https:\/\/dhpp\.hpfb-dgpsa\.ca\/review-documents\/resource\/[^"]+)">([^<]+)<\/a>/);
     if (!titleMatch) continue;
-    
-    const url = titleMatch[1].startsWith('http') ? titleMatch[1] : `https://dhpp.hpfb-dgpsa.ca${titleMatch[1]}`;
-    const title = titleMatch[2].replace(/<[^>]*>/g, '').trim();
-    
-    if (!title || !url) continue;
-    
-    // Extract fields from definition list
-    const getField = (label: string): string | null => {
-      const regex = new RegExp(`${label}[^<]*<\\/dt>\\s*<dd[^>]*>([^<]*)<\\/dd>`, 'i');
-      const m = block.match(regex);
-      return m ? m[1].trim() : null;
-    };
-    
+
+    const url = titleMatch[1];
+    const title = titleMatch[2].trim();
+
     documents.push({
       title,
       url,
-      product_type: getField('Product Type'),
-      control_number: getField('Control Number'),
-      din: getField('DIN'),
-      manufacturer: getField('Manufacturer'),
-      submission_type: getField('Submission Type'),
-      date_filed: parseDate(getField('Date Filed') || getField('Submission Date')),
-      decision_date: parseDate(getField('Decision') || getField('Authorization Date')),
-      issued_date: parseDate(getField('Issued') || getField('Original Publication Date')),
-      updated_date: parseDate(getField('Updated Date')),
+      product_type: extractField(block, 'name-1'),
+      control_number: extractField(block, 'field-control-number-dsts-number'),
+      din: extractField(block, 'field-din'),
+      manufacturer: extractField(block, 'name-3'),
+      submission_type: extractField(block, 'name-5'),
+      date_filed: parseDate(extractField(block, 'field-date-filed')),
+      decision_date: parseDate(extractField(block, 'field-original-decision-date-1')),
+      issued_date: parseDate(extractField(block, 'field-issued-date-1')),
+      updated_date: parseDate(extractField(block, 'field-updated-date')),
     });
   }
-  
-  return documents;
-}
 
-// Fallback: parse from text content (markdown-like)
-function parseDocumentsFromText(text: string): ReviewDocument[] {
-  const documents: ReviewDocument[] = [];
-  const lines = text.split('\n');
-  
-  let current: Partial<ReviewDocument> | null = null;
-  
-  for (const line of lines) {
-    const trimmed = line.trim();
-    
-    // Title line - starts with a link pattern
-    const linkMatch = trimmed.match(/^\[(.+?)\]\((https:\/\/dhpp\.hpfb-dgpsa\.ca\/review-documents\/resource\/[^\)]+)\)/);
-    if (linkMatch) {
-      if (current?.title && current?.url) {
-        documents.push(current as ReviewDocument);
-      }
-      current = {
-        title: linkMatch[1],
-        url: linkMatch[2],
-        product_type: null,
-        control_number: null,
-        din: null,
-        manufacturer: null,
-        submission_type: null,
-        date_filed: null,
-        decision_date: null,
-        issued_date: null,
-        updated_date: null,
-      };
-      continue;
-    }
-    
-    if (!current) continue;
-    
-    if (trimmed.startsWith('Product Type:')) current.product_type = trimmed.replace('Product Type:', '').trim();
-    if (trimmed.startsWith('Control Number:')) current.control_number = trimmed.replace('Control Number:', '').trim();
-    if (trimmed.startsWith('DIN')) current.din = trimmed.replace(/^DIN\(s\):/, '').trim();
-    if (trimmed.startsWith('Manufacturer:')) current.manufacturer = trimmed.replace('Manufacturer:', '').trim();
-    if (trimmed.startsWith('Submission Type:')) current.submission_type = trimmed.replace('Submission Type:', '').trim();
-    if (trimmed.startsWith('Date Filed')) current.date_filed = parseDate(trimmed);
-    if (trimmed.startsWith('Decision')) current.decision_date = parseDate(trimmed);
-    if (trimmed.startsWith('Issued')) current.issued_date = parseDate(trimmed);
-    if (trimmed.startsWith('Updated Date:')) current.updated_date = parseDate(trimmed);
-  }
-  
-  if (current?.title && current?.url) {
-    documents.push(current as ReviewDocument);
-  }
-  
   return documents;
 }
 
@@ -137,36 +85,25 @@ Deno.serve(async (req) => {
 
     const allDocuments: ReviewDocument[] = [];
 
-    // Scrape multiple pages
     for (let page = 0; page < PAGES_TO_SCRAPE; page++) {
       const url = page === 0 ? BASE_URL : `${BASE_URL}?page=${page}`;
       console.log(`Fetching page ${page}: ${url}`);
-      
+
       try {
         const response = await fetch(url, {
           headers: {
-            'User-Agent': 'HealthCanadaMonitor/1.0',
-            'Accept': 'text/html,application/xhtml+xml',
+            'User-Agent': 'Mozilla/5.0 (compatible; HealthCanadaMonitor/1.0)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           },
         });
-        
+
         if (!response.ok) {
           console.error(`Failed to fetch page ${page}: ${response.status}`);
           continue;
         }
-        
+
         const html = await response.text();
-        
-        // Try HTML parsing first
-        let docs = parseDocumentsFromHtml(html);
-        
-        // Fallback to text parsing if HTML parsing yields nothing
-        if (docs.length === 0) {
-          // Convert HTML to rough text
-          const text = html.replace(/<[^>]*>/g, '\n').replace(/\n{3,}/g, '\n\n');
-          docs = parseDocumentsFromText(text);
-        }
-        
+        const docs = parseDocumentsFromHtml(html);
         console.log(`Page ${page}: found ${docs.length} documents`);
         allDocuments.push(...docs);
       } catch (err) {
@@ -177,7 +114,6 @@ Deno.serve(async (req) => {
     console.log(`Total documents scraped: ${allDocuments.length}`);
 
     if (allDocuments.length === 0) {
-      // Log failed scan
       await supabase.from('scan_log').insert({
         new_documents_count: 0,
         total_documents_count: 0,
@@ -190,33 +126,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Upsert documents (insert new, skip existing based on URL)
+    // Get existing URLs to count new ones
+    const { data: existingDocs } = await supabase
+      .from('review_documents')
+      .select('url');
+    
+    const existingUrls = new Set((existingDocs || []).map((d: { url: string }) => d.url));
+    
     let newCount = 0;
     for (const doc of allDocuments) {
-      const { error } = await supabase
-        .from('review_documents')
-        .upsert(doc, { onConflict: 'url', ignoreDuplicates: true });
-      
-      if (!error) {
-        // Check if it was actually new
-        const { data: existing } = await supabase
-          .from('review_documents')
-          .select('first_seen_at, created_at')
-          .eq('url', doc.url)
-          .single();
-        
-        if (existing) {
-          const firstSeen = new Date(existing.first_seen_at).getTime();
-          const createdAt = new Date(existing.created_at).getTime();
-          // If first_seen is very close to created_at (within 5 seconds), it's new
-          if (Math.abs(firstSeen - createdAt) < 5000) {
-            const now = Date.now();
-            if (Math.abs(now - createdAt) < 60000) {
-              newCount++;
-            }
-          }
-        }
+      if (!existingUrls.has(doc.url)) {
+        newCount++;
       }
+    }
+
+    // Upsert all documents
+    const { error: upsertError } = await supabase
+      .from('review_documents')
+      .upsert(allDocuments, { onConflict: 'url', ignoreDuplicates: true });
+
+    if (upsertError) {
+      console.error('Upsert error:', upsertError);
     }
 
     // Get total count
