@@ -23,6 +23,7 @@ export type Database = {
           din: string | null
           first_seen_at: string
           id: string
+          indication_summary: string | null
           issued_date: string | null
           manufacturer: string | null
           product_type: string | null
@@ -39,6 +40,7 @@ export type Database = {
           din?: string | null
           first_seen_at?: string
           id?: string
+          indication_summary?: string | null
           issued_date?: string | null
           manufacturer?: string | null
           product_type?: string | null
@@ -55,6 +57,7 @@ export type Database = {
           din?: string | null
           first_seen_at?: string
           id?: string
+          indication_summary?: string | null
           issued_date?: string | null
           manufacturer?: string | null
           product_type?: string | null

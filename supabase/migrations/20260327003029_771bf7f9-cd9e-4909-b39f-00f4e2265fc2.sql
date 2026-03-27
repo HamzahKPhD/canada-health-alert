@@ -1,0 +1,1 @@
+ALTER TABLE public.review_documents ADD COLUMN IF NOT EXISTS indication_summary TEXT;
