@@ -20,6 +20,7 @@ interface ReviewDocument {
   decision_date: string | null;
   issued_date: string | null;
   updated_date: string | null;
+  indication_summary: string | null;
   first_seen_at: string;
 }
 

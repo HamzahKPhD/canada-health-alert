@@ -29,7 +29,6 @@ function parseDate(dateStr: string | null): string | null {
 }
 
 function extractField(block: string, labelClass: string): string | null {
-  // Match: <span class="views-label views-label-{labelClass}">...</span><span class="field-content">VALUE</span>
   const regex = new RegExp(
     `views-label-${labelClass}">[^<]*</span>\\s*<span class="field-content">([^<]*)</span>`,
     'i'
@@ -40,23 +39,16 @@ function extractField(block: string, labelClass: string): string | null {
 
 function parseDocumentsFromHtml(html: string): ReviewDocument[] {
   const documents: ReviewDocument[] = [];
-
-  // Split by review-document divs
   const parts = html.split(/<div class="review-document views-row/);
 
   for (let i = 1; i < parts.length; i++) {
     const block = parts[i];
-
-    // Extract title and URL from the link
     const titleMatch = block.match(/<a href="(https:\/\/dhpp\.hpfb-dgpsa\.ca\/review-documents\/resource\/[^"]+)">([^<]+)<\/a>/);
     if (!titleMatch) continue;
 
-    const url = titleMatch[1];
-    const title = titleMatch[2].trim();
-
     documents.push({
-      title,
-      url,
+      title: titleMatch[2].trim(),
+      url: titleMatch[1],
       product_type: extractField(block, 'name-1'),
       control_number: extractField(block, 'field-control-number-dsts-number'),
       din: extractField(block, 'field-din'),
@@ -70,6 +62,51 @@ function parseDocumentsFromHtml(html: string): ReviewDocument[] {
   }
 
   return documents;
+}
+
+function extractIndicationFromHtml(html: string): string | null {
+  // Look for indication text - typically after "What was the purpose" or "indicated for"
+  // Try to find the authorized indication first
+  const authorizedMatch = html.match(/After review.*?indicated for:\s*<\/p>\s*<ul[^>]*>\s*<li[^>]*>([\s\S]*?)<\/li>/i);
+  if (authorizedMatch) {
+    return authorizedMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Try the submitted indication
+  const indicatedMatch = html.match(/indicated for:\s*<\/p>\s*<ul[^>]*>\s*<li[^>]*>([\s\S]*?)<\/li>/i);
+  if (indicatedMatch) {
+    return indicatedMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Try a broader pattern - look for indication in paragraph text
+  const broadMatch = html.match(/is indicated for[:\s]+([\s\S]*?)(?:<\/p>|<\/li>)/i);
+  if (broadMatch) {
+    return broadMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  // For safety reviews or other document types, extract the purpose
+  const purposeMatch = html.match(/purpose of this.*?(?:submission|review).*?<\/(?:p|h\d)>\s*<p[^>]*>([\s\S]*?)<\/p>/i);
+  if (purposeMatch) {
+    const text = purposeMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    if (text.length > 20 && text.length < 500) return text;
+  }
+
+  return null;
+}
+
+async function fetchDetailPage(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; HealthCanadaMonitor/1.0)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    if (!response.ok) return null;
+    return await response.text();
+  } catch {
+    return null;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -149,6 +186,40 @@ Deno.serve(async (req) => {
       console.error('Upsert error:', upsertError);
     }
 
+    // Now fetch indication summaries for documents that don't have one yet
+    const { data: docsNeedingIndication } = await supabase
+      .from('review_documents')
+      .select('id, url')
+      .is('indication_summary', null)
+      .limit(10); // Process up to 10 per scan to avoid timeout
+
+    let indicationsAdded = 0;
+    if (docsNeedingIndication && docsNeedingIndication.length > 0) {
+      console.log(`Fetching indications for ${docsNeedingIndication.length} documents`);
+      
+      for (const doc of docsNeedingIndication) {
+        const html = await fetchDetailPage(doc.url);
+        if (!html) continue;
+
+        const indication = extractIndicationFromHtml(html);
+        if (indication) {
+          const { error } = await supabase
+            .from('review_documents')
+            .update({ indication_summary: indication })
+            .eq('id', doc.id);
+          
+          if (!error) indicationsAdded++;
+        } else {
+          // Mark as "N/A" so we don't re-fetch
+          await supabase
+            .from('review_documents')
+            .update({ indication_summary: 'Not available for this document type' })
+            .eq('id', doc.id);
+        }
+      }
+      console.log(`Added ${indicationsAdded} indication summaries`);
+    }
+
     // Get total count
     const { count } = await supabase
       .from('review_documents')
@@ -167,6 +238,7 @@ Deno.serve(async (req) => {
         scraped: allDocuments.length,
         new_documents: newCount,
         total_in_db: count,
+        indications_added: indicationsAdded,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
