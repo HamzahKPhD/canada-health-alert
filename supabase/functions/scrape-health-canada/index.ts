@@ -64,34 +64,79 @@ function parseDocumentsFromHtml(html: string): ReviewDocument[] {
   return documents;
 }
 
-function extractIndicationFromHtml(html: string): string | null {
-  // Look for indication text - typically after "What was the purpose" or "indicated for"
-  // Try to find the authorized indication first
-  const authorizedMatch = html.match(/After review.*?indicated for:\s*<\/p>\s*<ul[^>]*>\s*<li[^>]*>([\s\S]*?)<\/li>/i);
-  if (authorizedMatch) {
-    return authorizedMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+function extractDetailSections(html: string): string {
+  // Extract content from <details> blocks which contain purpose and decision info
+  const sections: string[] = [];
+  
+  // Get all details blocks
+  const detailsRegex = /<details[^>]*>\s*<summary[^>]*>([\s\S]*?)<\/summary>\s*<div class="details-wrapper">([\s\S]*?)<\/div>\s*<\/details>/gi;
+  let match;
+  while ((match = detailsRegex.exec(html)) !== null) {
+    const heading = match[1].replace(/<[^>]+>/g, '').trim();
+    const content = match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (heading && content) {
+      sections.push(`${heading}: ${content}`);
+    }
+  }
+  
+  // Also extract therapeutic area
+  const therapeuticMatch = html.match(/<strong>Therapeutic Area:\s*<\/strong>[\s\S]*?<p>([^<]+)<\/p>/i);
+  if (therapeuticMatch) {
+    sections.push(`Therapeutic Area: ${therapeuticMatch[1].trim()}`);
   }
 
-  // Try the submitted indication
-  const indicatedMatch = html.match(/indicated for:\s*<\/p>\s*<ul[^>]*>\s*<li[^>]*>([\s\S]*?)<\/li>/i);
-  if (indicatedMatch) {
-    return indicatedMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  // Extract medicinal ingredient
+  const ingredientMatch = html.match(/<strong>Medicinal Ingredient\(s\):\s*<\/strong>[\s\S]*?<p>([^<]+)<\/p>/i);
+  if (ingredientMatch) {
+    sections.push(`Medicinal Ingredient: ${ingredientMatch[1].trim()}`);
+  }
+  
+  return sections.join('\n\n');
+}
+
+async function getIndicationSummary(pageText: string, title: string): Promise<string | null> {
+  const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+  if (!lovableApiKey) {
+    console.error('LOVABLE_API_KEY not set, cannot generate AI summaries');
+    return null;
   }
 
-  // Try a broader pattern - look for indication in paragraph text
-  const broadMatch = html.match(/is indicated for[:\s]+([\s\S]*?)(?:<\/p>|<\/li>)/i);
-  if (broadMatch) {
-    return broadMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-  }
+  try {
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${lovableApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a pharmaceutical regulatory expert. Given text from a Health Canada review document, extract a concise 1-2 sentence summary of what the drug is indicated/approved for. For biosimilars, state that it is a biosimilar and mention the reference drug and its therapeutic uses. For safety reviews, summarize the safety concern being reviewed. Be precise and clinical. Only return the summary text, nothing else.'
+          },
+          {
+            role: 'user',
+            content: `Document title: ${title}\n\nPage content:\n${pageText.substring(0, 3000)}`
+          }
+        ],
+        max_tokens: 200,
+        temperature: 0.1,
+      }),
+    });
 
-  // For safety reviews or other document types, extract the purpose
-  const purposeMatch = html.match(/purpose of this.*?(?:submission|review).*?<\/(?:p|h\d)>\s*<p[^>]*>([\s\S]*?)<\/p>/i);
-  if (purposeMatch) {
-    const text = purposeMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-    if (text.length > 20 && text.length < 500) return text;
-  }
+    if (!response.ok) {
+      console.error('AI API error:', response.status, await response.text());
+      return null;
+    }
 
-  return null;
+    const data = await response.json();
+    const summary = data.choices?.[0]?.message?.content?.trim();
+    return summary || null;
+  } catch (err) {
+    console.error('Error calling AI API:', err);
+    return null;
+  }
 }
 
 async function fetchDetailPage(url: string): Promise<string | null> {
@@ -186,12 +231,12 @@ Deno.serve(async (req) => {
       console.error('Upsert error:', upsertError);
     }
 
-    // Now fetch indication summaries for documents that don't have one yet
+    // Fetch indication summaries for documents that don't have one yet
     const { data: docsNeedingIndication } = await supabase
       .from('review_documents')
-      .select('id, url')
+      .select('id, url, title')
       .is('indication_summary', null)
-      .limit(10); // Process up to 10 per scan to avoid timeout
+      .limit(10);
 
     let indicationsAdded = 0;
     if (docsNeedingIndication && docsNeedingIndication.length > 0) {
@@ -201,16 +246,23 @@ Deno.serve(async (req) => {
         const html = await fetchDetailPage(doc.url);
         if (!html) continue;
 
-        const indication = extractIndicationFromHtml(html);
-        if (indication) {
-          const { error } = await supabase
+        const pageText = extractDetailSections(html);
+        if (!pageText) {
+          await supabase
             .from('review_documents')
-            .update({ indication_summary: indication })
+            .update({ indication_summary: 'Not available for this document type' })
             .eq('id', doc.id);
-          
-          if (!error) indicationsAdded++;
+          continue;
+        }
+
+        const summary = await getIndicationSummary(pageText, doc.title);
+        if (summary) {
+          await supabase
+            .from('review_documents')
+            .update({ indication_summary: summary })
+            .eq('id', doc.id);
+          indicationsAdded++;
         } else {
-          // Mark as "N/A" so we don't re-fetch
           await supabase
             .from('review_documents')
             .update({ indication_summary: 'Not available for this document type' })
