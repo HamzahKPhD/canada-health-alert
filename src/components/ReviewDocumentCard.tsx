@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { ExternalLink, Calendar, Building2, FileText } from "lucide-react";
+import { ExternalLink, Calendar, Building2, FileText, Pill } from "lucide-react";
 
 interface ReviewDocument {
   id: string;
@@ -15,6 +15,7 @@ interface ReviewDocument {
   decision_date: string | null;
   issued_date: string | null;
   updated_date: string | null;
+  indication_summary: string | null;
   first_seen_at: string;
 }
 
@@ -36,6 +37,7 @@ function formatDate(dateStr: string | null): string {
 
 export function ReviewDocumentCard({ doc }: { doc: ReviewDocument }) {
   const isNewDoc = isNew(doc.first_seen_at);
+  const authDate = doc.decision_date || doc.issued_date;
 
   return (
     <Card className="group relative overflow-hidden border-border/60 transition-all duration-200 hover:border-primary/30 hover:shadow-md">
@@ -87,10 +89,13 @@ export function ReviewDocumentCard({ doc }: { doc: ReviewDocument }) {
               <span className="truncate font-mono text-xs">{doc.din}</span>
             </div>
           )}
-          {(doc.decision_date || doc.issued_date) && (
+          {authDate && (
             <div className="flex items-center gap-1.5">
               <Calendar className="h-3.5 w-3.5 shrink-0" />
-              <span>{formatDate(doc.decision_date || doc.issued_date)}</span>
+              <span>
+                <span className="font-medium text-foreground">Authorization:</span>{" "}
+                {formatDate(authDate)}
+              </span>
             </div>
           )}
           {doc.control_number && (
@@ -100,6 +105,21 @@ export function ReviewDocumentCard({ doc }: { doc: ReviewDocument }) {
             </div>
           )}
         </div>
+
+        {/* Indication Summary */}
+        {doc.indication_summary && doc.indication_summary !== 'Not available for this document type' && (
+          <div className="pt-2 border-t border-border/40">
+            <div className="flex items-start gap-2">
+              <Pill className="h-3.5 w-3.5 mt-0.5 shrink-0 text-primary" />
+              <div>
+                <span className="text-xs font-semibold text-foreground">Indication:</span>
+                <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
+                  {doc.indication_summary}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Card>
   );
