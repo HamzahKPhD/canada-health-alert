@@ -6,11 +6,7 @@ const corsHeaders = {
 };
 
 const DHPP_BASE = 'https://dhpp.hpfb-dgpsa.ca/review-documents';
-const USER_AGENT = 'Mozilla/5.0 (compatible; HealthCanadaMonitor/1.0)';
-const FETCH_HEADERS = {
-  'User-Agent': USER_AGENT,
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-};
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // ---- Types ----
 interface DhppDocument {
@@ -52,6 +48,39 @@ interface MedEffectItem {
   therapeutic_area: string | null;
 }
 
+// ---- Fetch with retry (sequential, avoids HTTP/2 errors) ----
+async function fetchWithRetry(url: string, maxRetries = 2): Promise<Response | null> {
+  const isCanadaCa = url.includes('canada.ca');
+  const proxies = [
+    (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  ];
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 2000));
+      
+      const headers: Record<string, string> = {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-CA,en;q=0.9',
+      };
+      
+      let fetchUrl = url;
+      if (isCanadaCa) {
+        fetchUrl = proxies[attempt % proxies.length](url);
+      }
+      
+      const res = await fetch(fetchUrl, { headers });
+      if (res.ok) return res;
+      console.error(`Fetch ${url} returned ${res.status} (attempt ${attempt + 1})`);
+    } catch (err) {
+      console.error(`Fetch attempt ${attempt + 1} for ${url}: ${err}`);
+    }
+  }
+  return null;
+}
+
 // ---- Utility ----
 function parseDate(dateStr: string | null): string | null {
   if (!dateStr) return null;
@@ -72,25 +101,12 @@ function getPublicationDate(doc: DhppDocument): string | null {
 
 function classifyTherapeuticArea(title: string, indication: string | null): string {
   const text = `${title} ${indication || ''}`.toLowerCase();
-  
-  // CMC - Chemistry, Manufacturing, and Controls
   if (/\b(chemistry|manufacturing|controls|cmc|formulation|stability|impurit|excipient|specification|analytical|dissolution|bioequivalence)\b/.test(text)) return 'CMC';
-  
-  // ONC - Oncology
   if (/\b(cancer|oncolog|tumor|tumour|carcinoma|lymphoma|leukemia|leukaemia|melanoma|sarcoma|myeloma|neoplasm|chemotherapy|anti-cancer|antineoplastic|metasta|malignant|glioblastoma|immunotherapy for.*cancer|checkpoint inhibitor)\b/.test(text)) return 'ONC';
-  
-  // CVRM - Cardiovascular, Renal, and Metabolism
   if (/\b(cardiovascular|cardiac|heart|hypertension|diabetes|diabet|insulin|renal|kidney|metaboli|cholesterol|lipid|statin|anticoagulant|thrombosis|atherosclerosis|arrhythmia|angina|myocardial|obesity|dyslipidemia|nephro|dialysis|glp-1|sglt2|dpp-4)\b/.test(text)) return 'CVRM';
-  
-  // CTA - Clinical Trials
   if (/\b(clinical trial|cta |phase [i1-3]|investigational|trial application)\b/.test(text)) return 'CTA';
-  
-  // RAOE - Regulatory Affairs and Operations
   if (/\b(regulatory|compliance|enforcement|inspection|recall|guidance|policy|label|labelling|monograph|form |notice|administrative|procedural)\b/.test(text)) return 'RAOE';
-  
-  // RV&IT - Vaccines and Infectious Diseases
   if (/\b(vaccine|vaccin|infectious|infection|antiviral|antibiotic|antimicrobial|hiv|hepatitis|influenza|covid|sars|tuberculosis|malaria|fungal|antifungal|immunization|pandemic|pathogen|viral|bacteria)\b/.test(text)) return 'RV&IT';
-  
   return 'OTHER';
 }
 
@@ -109,7 +125,7 @@ function parseDhppPage(html: string): DhppDocument[] {
 
   for (let i = 1; i < parts.length; i++) {
     const block = parts[i];
-    const titleMatch = block.match(/<a href="(https:\/\/dhpp\.hpfb-dgpsa\.ca\/review-documents\/resource\/[^"]+)">([^<]+)<\/a>/);
+    const titleMatch = block.match(/<a href="(https:\/\/dhpp\.hpfb-dgpsa\.ca\/review-documents\/resource\/[^"]+)">([\s\S]*?)<\/a>/);
     if (!titleMatch) continue;
 
     let type: 'RDS' | 'SBD' | 'SSR' = 'RDS';
@@ -118,7 +134,7 @@ function parseDhppPage(html: string): DhppDocument[] {
 
     documents.push({
       type,
-      title: titleMatch[2].trim(),
+      title: titleMatch[2].replace(/<[^>]+>/g, '').trim(),
       url: titleMatch[1],
       product_type: extractField(block, 'name-1'),
       control_number: extractField(block, 'field-control-number-dsts-number'),
@@ -137,71 +153,87 @@ function parseDhppPage(html: string): DhppDocument[] {
   return documents;
 }
 
+function getTotalPages(html: string): number {
+  const m = html.match(/Page \d+ of (\d+)/);
+  return m ? parseInt(m[1]) : 1;
+}
+
 async function scrapeDhpp(dateFrom: string, dateTo: string): Promise<DhppDocument[]> {
   const allDocs: DhppDocument[] = [];
-  const maxPages = 10;
+  
+  // First page to get total count
+  console.log(`DHPP page 0: ${DHPP_BASE}`);
+  const firstRes = await fetchWithRetry(DHPP_BASE);
+  if (!firstRes) return allDocs;
+  const firstHtml = await firstRes.text();
+  const firstDocs = parseDhppPage(firstHtml);
+  const totalPages = getTotalPages(firstHtml);
+  console.log(`DHPP: ${totalPages} total pages`);
 
-  for (let page = 0; page < maxPages; page++) {
-    const url = page === 0 ? DHPP_BASE : `${DHPP_BASE}?page=${page}`;
+  // Add docs from first page that are in range
+  let foundOlder = false;
+  for (const doc of firstDocs) {
+    const pubDate = getPublicationDate(doc);
+    if (pubDate && isInRange(pubDate, dateFrom, dateTo)) {
+      allDocs.push(doc);
+    }
+    if (pubDate && pubDate < dateFrom) foundOlder = true;
+  }
+
+  if (foundOlder) return allDocs;
+
+  // Continue pagination
+  const maxPages = Math.min(totalPages, 30);
+  for (let page = 1; page < maxPages; page++) {
+    const url = `${DHPP_BASE}?page=${page}`;
     console.log(`DHPP page ${page}: ${url}`);
-    try {
-      const res = await fetch(url, { headers: FETCH_HEADERS });
-      if (!res.ok) break;
-      const html = await res.text();
-      const docs = parseDhppPage(html);
-      if (docs.length === 0) break;
+    const res = await fetchWithRetry(url);
+    if (!res) break;
+    const html = await res.text();
+    const docs = parseDhppPage(html);
+    if (docs.length === 0) break;
 
-      let anyInOrAfterRange = false;
-      for (const doc of docs) {
-        const pubDate = getPublicationDate(doc);
-        if (pubDate && pubDate >= dateFrom) {
-          anyInOrAfterRange = true;
-          if (isInRange(pubDate, dateFrom, dateTo)) {
-            allDocs.push(doc);
-          }
+    let anyInOrAfterRange = false;
+    for (const doc of docs) {
+      const pubDate = getPublicationDate(doc);
+      if (pubDate && pubDate >= dateFrom) {
+        anyInOrAfterRange = true;
+        if (isInRange(pubDate, dateFrom, dateTo)) {
+          allDocs.push(doc);
         }
       }
-      if (!anyInOrAfterRange) break;
-    } catch (err) {
-      console.error(`DHPP page ${page} error:`, err);
-      break;
     }
+    if (!anyInOrAfterRange) break;
   }
   return allDocs;
 }
 
-// Scrape the previous 4 weeks for backdating detection
+// Extended scrape for backdating
 async function scrapeDhppExtended(dateFrom: string): Promise<DhppDocument[]> {
-  // Go back 4 weeks from dateFrom
   const extendedFrom = new Date(dateFrom + 'T00:00:00');
   extendedFrom.setDate(extendedFrom.getDate() - 28);
   const extFromStr = extendedFrom.toISOString().split('T')[0];
   
   const allDocs: DhppDocument[] = [];
-  const maxPages = 15;
+  const maxPages = 20;
 
   for (let page = 0; page < maxPages; page++) {
     const url = page === 0 ? DHPP_BASE : `${DHPP_BASE}?page=${page}`;
-    try {
-      const res = await fetch(url, { headers: FETCH_HEADERS });
-      if (!res.ok) break;
-      const html = await res.text();
-      const docs = parseDhppPage(html);
-      if (docs.length === 0) break;
+    const res = await fetchWithRetry(url);
+    if (!res) break;
+    const html = await res.text();
+    const docs = parseDhppPage(html);
+    if (docs.length === 0) break;
 
-      let anyInOrAfterRange = false;
-      for (const doc of docs) {
-        const pubDate = getPublicationDate(doc);
-        if (pubDate && pubDate >= extFromStr) {
-          anyInOrAfterRange = true;
-          allDocs.push(doc);
-        }
+    let anyInOrAfterRange = false;
+    for (const doc of docs) {
+      const pubDate = getPublicationDate(doc);
+      if (pubDate && pubDate >= extFromStr) {
+        anyInOrAfterRange = true;
+        allDocs.push(doc);
       }
-      if (!anyInOrAfterRange) break;
-    } catch (err) {
-      console.error(`DHPP extended page ${page} error:`, err);
-      break;
     }
+    if (!anyInOrAfterRange) break;
   }
   return allDocs;
 }
@@ -213,7 +245,6 @@ async function detectBackdated(
   dateTo: string,
   supabase: ReturnType<typeof createClient>
 ): Promise<DhppDocument[]> {
-  // Get all snapshot URLs from previous reports that overlap the 4-week lookback
   const lookbackFrom = new Date(dateFrom + 'T00:00:00');
   lookbackFrom.setDate(lookbackFrom.getDate() - 28);
   const lookbackStr = lookbackFrom.toISOString().split('T')[0];
@@ -230,44 +261,32 @@ async function detectBackdated(
     return [];
   }
 
-  // Collect all URLs that were in previous snapshots
   const previousUrls = new Set<string>();
   for (const snap of snapshots) {
     const urls = snap.document_urls as string[];
-    if (Array.isArray(urls)) {
-      urls.forEach(u => previousUrls.add(u));
-    }
+    if (Array.isArray(urls)) urls.forEach(u => previousUrls.add(u));
   }
-
   console.log(`Previous snapshots contain ${previousUrls.size} URLs`);
 
-  // Scrape extended range to find docs in previous date ranges
   const extendedDocs = await scrapeDhppExtended(dateFrom);
-  
-  // Filter: docs that are in the previous date ranges but NOT in previous snapshots = backdated
   const backdated: DhppDocument[] = [];
   const currentUrlSet = new Set(currentDocs.map(d => d.url));
 
   for (const doc of extendedDocs) {
     const pubDate = getPublicationDate(doc);
     if (!pubDate) continue;
-    // Skip docs already in current range
     if (currentUrlSet.has(doc.url)) continue;
-    // Doc is in the previous 4 weeks range but not in our current range
     if (pubDate >= lookbackStr && pubDate < dateFrom) {
-      // Was NOT in previous snapshots = it's backdated
       if (!previousUrls.has(doc.url)) {
         doc.is_backdated = true;
         backdated.push(doc);
       }
     }
   }
-
   console.log(`Found ${backdated.length} backdated documents`);
   return backdated;
 }
 
-// Save current snapshot
 async function saveSnapshot(
   docs: DhppDocument[],
   dateFrom: string,
@@ -347,260 +366,270 @@ async function enrichWithIndications(docs: DhppDocument[], supabase: ReturnType<
     }
   }
 
-  const toProcess = needFetch.slice(0, 8);
+  // Fetch detail pages SEQUENTIALLY to avoid HTTP/2 errors
+  const toProcess = needFetch.slice(0, 10);
   console.log(`Fetching ${toProcess.length} detail pages for AI summaries`);
 
-  await Promise.all(toProcess.map(async (doc) => {
+  for (const doc of toProcess) {
     try {
-      const res = await fetch(doc.url, { headers: FETCH_HEADERS });
-      if (!res.ok) return;
+      const res = await fetchWithRetry(doc.url);
+      if (!res) {
+        doc.indication_summary = 'Not available for this document type';
+        continue;
+      }
       const html = await res.text();
       const text = extractDetailSections(html);
       if (!text) {
         doc.indication_summary = 'Not available for this document type';
-        return;
+        continue;
       }
       const summary = await getAiSummary(text, doc.title);
       doc.indication_summary = summary || 'Not available for this document type';
     } catch {
       doc.indication_summary = 'Not available for this document type';
     }
-  }));
+  }
 
-  // Classify therapeutic areas for all docs
   for (const doc of docs) {
     doc.therapeutic_area = classifyTherapeuticArea(doc.title, doc.indication_summary);
   }
 }
 
 // ---- What's New pages scraping ----
-function parseHtmlWhatsNew(html: string, dateFrom: string, dateTo: string, source: string): GuidanceItem[] {
+// These pages use accordion <details> with year headers and <h3> month headers
+// Items are in <ul><li> with dates in [YYYY-MM-DD] format (sometimes wrapped in <span class="nowrap">)
+function parseWhatsNewPage(html: string, dateFrom: string, dateTo: string, source: string): GuidanceItem[] {
   const items: GuidanceItem[] = [];
+  
+  const skipPatterns = [
+    'Multiple additions to the Prescription Drug List',
+    'Updated List of Drugs for an Urgent Public Health Need',
+    'Updated Register of Certificates of Supplementary Protection',
+    'Medical Devices',
+    'Register for Innovative Drugs',
+    'Register of Innovative Drugs',
+    'NOC Data Extract',
+    'Notice of Compliance (NOC) Data Extract',
+    'DPD Extract',
+    'Drug Product Database data extract',
+    'Product Monograph Brand Safety Updates',
+    'Summary Basis of Decision',
+    'Monthly update to the submissions under review',
+    'Monthly update to the generic submissions',
+  ];
+
+  // Extract all <li> items with links and dates
   const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
   let match;
   while ((match = liRegex.exec(html)) !== null) {
     const content = match[1];
-    const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/);
+    const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    // Date can be in [YYYY-MM-DD] or inside <span class="nowrap">[YYYY-MM-DD]</span>
     const dateMatch = content.match(/\[(\d{4}-\d{2}-\d{2})\]/);
     if (!linkMatch || !dateMatch) continue;
 
     const date = dateMatch[1];
     if (!isInRange(date, dateFrom, dateTo)) continue;
 
-    const title = linkMatch[2].trim();
-    const url = linkMatch[1];
-
-    const skipPatterns = [
-      'Multiple additions to the Prescription Drug List',
-      'Updated List of Drugs for an Urgent Public Health Need',
-      'Updated Register of Certificates of Supplementary Protection',
-      'Medical Devices',
-      'Register for Innovative Drugs',
-      'NOC Data Extract',
-      'Notice of Compliance (NOC) Data Extract',
-      'DPD Extract',
-      'Product Monograph Brand Safety Updates',
-      'Summary Basis of Decision',
-    ];
+    const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+    
     if (skipPatterns.some(p => title.includes(p))) continue;
 
+    const url = linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`;
     items.push({ title, url, date, source, therapeutic_area: classifyTherapeuticArea(title, null) });
   }
   return items;
 }
 
-async function scrapeWhatsNewPages(dateFrom: string, dateTo: string): Promise<GuidanceItem[]> {
-  const urls = [
+async function scrapeAllWhatsNewPages(dateFrom: string, dateTo: string): Promise<GuidanceItem[]> {
+  const allItems: GuidanceItem[] = [];
+  
+  // Scrape each page SEQUENTIALLY to avoid HTTP/2 stream errors
+  const pages = [
     { url: 'https://www.canada.ca/en/health-canada/services/drugs-health-products/drug-products/what-new-drug-products-health-canada.html', source: 'Drug Products' },
     { url: 'https://www.canada.ca/en/health-canada/services/drugs-health-products/biologics-radio-pharmaceuticals-genetic-therapies/what-new-biologics-radiopharmaceuticals-genetic-therapies-health-canada.html', source: 'Biologics' },
     { url: 'https://www.canada.ca/en/health-canada/services/drugs-health-products/compliance-enforcement/what-new.html', source: 'Compliance & Enforcement' },
   ];
 
-  const results = await Promise.all(urls.map(async ({ url, source }) => {
-    try {
-      const res = await fetch(url, { headers: FETCH_HEADERS });
-      if (!res.ok) return [];
-      const html = await res.text();
-      return parseHtmlWhatsNew(html, dateFrom, dateTo, source);
-    } catch (err) {
-      console.error(`Error scraping ${source}:`, err);
-      return [];
+  for (const { url, source } of pages) {
+    console.log(`Scraping ${source}: ${url}`);
+    const res = await fetchWithRetry(url);
+    if (!res) {
+      console.error(`Failed to fetch ${source} after retries`);
+      continue;
     }
-  }));
+    const html = await res.text();
+    const items = parseWhatsNewPage(html, dateFrom, dateTo, source);
+    console.log(`${source}: found ${items.length} items`);
+    allItems.push(...items);
+    // Small delay between requests
+    await new Promise(r => setTimeout(r, 1000));
+  }
 
-  return results.flat();
+  return allItems;
 }
 
 // ---- Consultations scraping ----
 async function scrapeConsultations(dateFrom: string, dateTo: string): Promise<GuidanceItem[]> {
-  try {
-    const url = 'https://www.canada.ca/en/health-canada/services/drugs-health-products/public-involvement-consultations/current-past-consultations.html';
-    const res = await fetch(url, { headers: FETCH_HEADERS });
-    if (!res.ok) return [];
-    const html = await res.text();
-    const items: GuidanceItem[] = [];
+  console.log('Scraping consultations...');
+  const url = 'https://www.canada.ca/en/health-canada/services/drugs-health-products/public-involvement-consultations/current-past-consultations.html';
+  const res = await fetchWithRetry(url);
+  if (!res) return [];
+  const html = await res.text();
+  const items: GuidanceItem[] = [];
 
-    // Parse consultation items - look for end dates
-    const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-    let match;
-    while ((match = liRegex.exec(html)) !== null) {
-      const content = match[1];
-      const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-      if (!linkMatch) continue;
+  // Parse consultation items looking for date ranges with end dates
+  const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+  let match;
+  while ((match = liRegex.exec(html)) !== null) {
+    const content = match[1];
+    const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!linkMatch) continue;
 
-      const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
-      const itemUrl = linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`;
+    const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+    const itemUrl = linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`;
 
-      // Look for end date patterns
-      const endDatePatterns = [
-        /(?:end|closing|close|deadline)[^:]*:\s*(\d{4}-\d{2}-\d{2})/i,
-        /(?:end|closing|close|deadline)[^:]*:\s*(\w+ \d{1,2},?\s*\d{4})/i,
-        /to\s+(\d{4}-\d{2}-\d{2})/i,
-      ];
+    // Look for end date patterns
+    let endDate: string | null = null;
+    
+    // Pattern: "to YYYY-MM-DD" or "ends YYYY-MM-DD" etc
+    const endDatePatterns = [
+      /(?:to|end|ends|closing|deadline|until)\s*(?::|)\s*(\d{4}-\d{2}-\d{2})/i,
+      /(\d{4}-\d{2}-\d{2})\s*$/,
+      /\[(\d{4}-\d{2}-\d{2})\]/,
+    ];
+    
+    // Also look for date ranges like "January 15, 2026 to February 28, 2026"
+    const naturalDateRange = content.match(/(?:to|until)\s+(\w+ \d{1,2},?\s*\d{4})/i);
+    if (naturalDateRange) {
+      try {
+        const d = new Date(naturalDateRange[1]);
+        if (!isNaN(d.getTime())) endDate = d.toISOString().split('T')[0];
+      } catch { /* skip */ }
+    }
 
-      let endDate: string | null = null;
+    if (!endDate) {
       for (const pat of endDatePatterns) {
         const m = content.match(pat);
         if (m) {
           endDate = parseDate(m[1]);
-          if (!endDate) {
-            // Try parsing natural date
-            try {
-              const d = new Date(m[1]);
-              if (!isNaN(d.getTime())) endDate = d.toISOString().split('T')[0];
-            } catch { /* skip */ }
-          }
           break;
         }
       }
-
-      // Also check for any date in brackets
-      if (!endDate) {
-        const dateMatch = content.match(/\[(\d{4}-\d{2}-\d{2})\]/);
-        if (dateMatch) endDate = dateMatch[1];
-      }
-
-      // Include if end date falls in range
-      if (endDate && isInRange(endDate, dateFrom, dateTo)) {
-        items.push({ title, url: itemUrl, date: endDate, source: 'Consultations', therapeutic_area: classifyTherapeuticArea(title, null) });
-      }
     }
-    return items;
-  } catch (err) {
-    console.error('Consultations scraping error:', err);
-    return [];
+
+    if (endDate && isInRange(endDate, dateFrom, dateTo)) {
+      items.push({ title, url: itemUrl, date: endDate, source: 'Consultations', therapeutic_area: classifyTherapeuticArea(title, null) });
+    }
   }
+  console.log(`Consultations: found ${items.length} items`);
+  return items;
 }
 
 // ---- MedEffect scraping ----
 async function scrapeMedEffectWhatsNew(dateFrom: string, dateTo: string): Promise<MedEffectItem[]> {
-  try {
-    const res = await fetch('https://www.canada.ca/en/health-canada/services/drugs-health-products/medeffect-canada/what-new.html', { headers: FETCH_HEADERS });
-    if (!res.ok) return [];
-    const html = await res.text();
-    const items: MedEffectItem[] = [];
-    const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-    let match;
-    while ((match = liRegex.exec(html)) !== null) {
-      const content = match[1];
-      const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-      const dateMatch = content.match(/\[(\d{4}-\d{2}-\d{2})\]/);
-      if (!linkMatch || !dateMatch) continue;
-      const date = dateMatch[1];
-      if (!isInRange(date, dateFrom, dateTo)) continue;
-      const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
-      items.push({
-        title,
-        url: linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`,
-        date,
-        therapeutic_area: classifyTherapeuticArea(title, null),
-      });
-    }
-    return items;
-  } catch (err) {
-    console.error('MedEffect What\'s New error:', err);
-    return [];
+  console.log('Scraping MedEffect What\'s New...');
+  await new Promise(r => setTimeout(r, 1500));
+  const res = await fetchWithRetry('https://www.canada.ca/en/health-canada/services/drugs-health-products/medeffect-canada/what-new.html');
+  if (!res) return [];
+  const html = await res.text();
+  const items: MedEffectItem[] = [];
+  
+  const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+  let match;
+  while ((match = liRegex.exec(html)) !== null) {
+    const content = match[1];
+    const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    const dateMatch = content.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+    if (!linkMatch || !dateMatch) continue;
+    const date = dateMatch[1];
+    if (!isInRange(date, dateFrom, dateTo)) continue;
+    const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+    items.push({
+      title,
+      url: linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`,
+      date,
+      therapeutic_area: classifyTherapeuticArea(title, null),
+    });
   }
+  console.log(`MedEffect What's New: found ${items.length} items`);
+  return items;
 }
 
-async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ periods: SafetyReviewPeriod[]; raw_html_snippet: string }> {
-  try {
-    const res = await fetch('https://www.canada.ca/en/health-canada/services/drugs-health-products/medeffect-canada/safety-reviews/new.html', { headers: FETCH_HEADERS });
-    if (!res.ok) return { periods: [], raw_html_snippet: '' };
-    const html = await res.text();
+async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ periods: SafetyReviewPeriod[] }> {
+  console.log('Scraping Safety Reviews...');
+  await new Promise(r => setTimeout(r, 1500));
+  const res = await fetchWithRetry('https://www.canada.ca/en/health-canada/services/drugs-health-products/medeffect-canada/safety-reviews/new.html');
+  if (!res) return { periods: [] };
+  const html = await res.text();
 
-    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-    const periods: SafetyReviewPeriod[] = [];
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const periods: SafetyReviewPeriod[] = [];
 
-    const periodRegex = /List of Safety and Effectiveness Reviews Initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
-    let periodMatch;
-    const periodPositions: { periodFrom: string; periodTo: string }[] = [];
-
-    while ((periodMatch = periodRegex.exec(text)) !== null) {
-      periodPositions.push({ periodFrom: periodMatch[1], periodTo: periodMatch[2] });
-    }
-
-    const noReviewRegex = /No safety and effectiveness reviews initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
-    let noMatch;
-    const noReviewPeriods: { from: string; to: string }[] = [];
-    while ((noMatch = noReviewRegex.exec(text)) !== null) {
-      noReviewPeriods.push({ from: noMatch[1], to: noMatch[2] });
-    }
-
-    for (const period of periodPositions) {
-      if (period.periodTo < dateFrom || period.periodFrom > dateTo) continue;
-
-      const periodLabel = `${period.periodFrom} to ${period.periodTo}`;
-      const noReview = noReviewPeriods.find(nr => nr.from === period.periodFrom);
-      if (noReview) {
-        periods.push({
-          period: periodLabel,
-          reviews: [],
-          no_reviews_message: `No safety and effectiveness reviews initiated from ${noReview.from} to ${noReview.to}`,
-        });
-        continue;
-      }
-
-      const reviews: SafetyReviewPeriod['reviews'] = [];
-      const periodHeaderInHtml = html.indexOf(`List of Safety and Effectiveness Reviews Initiated from ${period.periodFrom} to ${period.periodTo}`);
-      if (periodHeaderInHtml === -1) continue;
-
-      const nextTableStart = html.indexOf('<table', periodHeaderInHtml);
-      if (nextTableStart === -1) continue;
-      const nextTableEnd = html.indexOf('</table>', nextTableStart);
-      if (nextTableEnd === -1) continue;
-
-      const tableHtml = html.substring(nextTableStart, nextTableEnd + 8);
-      const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-      let rowMatch;
-      let isHeader = true;
-      while ((rowMatch = rowRegex.exec(tableHtml)) !== null) {
-        if (isHeader) { isHeader = false; continue; }
-        const cells: string[] = [];
-        const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-        let cellMatch;
-        while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
-          cells.push(cellMatch[1].replace(/<br\s*\/?>/gi, ', ').replace(/<[^>]+>/g, '').trim());
-        }
-        if (cells.length >= 4) {
-          reviews.push({
-            brand_name: cells[0],
-            ingredient: cells[1],
-            safety_issue: cells[2],
-            trigger: cells[3],
-            therapeutic_area: classifyTherapeuticArea(cells[0], cells[2]),
-          });
-        }
-      }
-
-      periods.push({ period: periodLabel, reviews, no_reviews_message: null });
-    }
-
-    return { periods, raw_html_snippet: '' };
-  } catch (err) {
-    console.error('Safety reviews error:', err);
-    return { periods: [], raw_html_snippet: '' };
+  const periodRegex = /List of Safety and Effectiveness Reviews Initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
+  let periodMatch;
+  const periodPositions: { periodFrom: string; periodTo: string }[] = [];
+  while ((periodMatch = periodRegex.exec(text)) !== null) {
+    periodPositions.push({ periodFrom: periodMatch[1], periodTo: periodMatch[2] });
   }
+
+  const noReviewRegex = /No safety and effectiveness reviews initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
+  let noMatch;
+  const noReviewPeriods: { from: string; to: string }[] = [];
+  while ((noMatch = noReviewRegex.exec(text)) !== null) {
+    noReviewPeriods.push({ from: noMatch[1], to: noMatch[2] });
+  }
+
+  for (const period of periodPositions) {
+    if (period.periodTo < dateFrom || period.periodFrom > dateTo) continue;
+
+    const periodLabel = `${period.periodFrom} to ${period.periodTo}`;
+    const noReview = noReviewPeriods.find(nr => nr.from === period.periodFrom);
+    if (noReview) {
+      periods.push({
+        period: periodLabel,
+        reviews: [],
+        no_reviews_message: `No safety and effectiveness reviews initiated from ${noReview.from} to ${noReview.to}`,
+      });
+      continue;
+    }
+
+    const reviews: SafetyReviewPeriod['reviews'] = [];
+    const periodHeaderInHtml = html.indexOf(`List of Safety and Effectiveness Reviews Initiated from ${period.periodFrom} to ${period.periodTo}`);
+    if (periodHeaderInHtml === -1) continue;
+
+    const nextTableStart = html.indexOf('<table', periodHeaderInHtml);
+    if (nextTableStart === -1) continue;
+    const nextTableEnd = html.indexOf('</table>', nextTableStart);
+    if (nextTableEnd === -1) continue;
+
+    const tableHtml = html.substring(nextTableStart, nextTableEnd + 8);
+    const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    let rowMatch;
+    let isHeader = true;
+    while ((rowMatch = rowRegex.exec(tableHtml)) !== null) {
+      if (isHeader) { isHeader = false; continue; }
+      const cells: string[] = [];
+      const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+      let cellMatch;
+      while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
+        cells.push(cellMatch[1].replace(/<br\s*\/?>/gi, ', ').replace(/<[^>]+>/g, '').trim());
+      }
+      if (cells.length >= 4) {
+        reviews.push({
+          brand_name: cells[0],
+          ingredient: cells[1],
+          safety_issue: cells[2],
+          trigger: cells[3],
+          therapeutic_area: classifyTherapeuticArea(cells[0], cells[2]),
+        });
+      }
+    }
+    periods.push({ period: periodLabel, reviews, no_reviews_message: null });
+  }
+
+  console.log(`Safety Reviews: found ${periods.length} periods`);
+  return { periods };
 }
 
 // ---- Main handler ----
@@ -625,28 +654,31 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    // Run all scraping in parallel
-    const [dhppDocs, guidanceItems, consultationItems, medEffectItems, safetyData] = await Promise.all([
-      scrapeDhpp(dateFrom, dateTo),
-      scrapeWhatsNewPages(dateFrom, dateTo),
-      scrapeConsultations(dateFrom, dateTo),
-      scrapeMedEffectWhatsNew(dateFrom, dateTo),
-      scrapeSafetyReviews(dateFrom, dateTo),
-    ]);
+    // DHPP can run in parallel with itself since it's a different domain
+    // canada.ca pages must be SEQUENTIAL to avoid HTTP/2 errors
+    
+    // Step 1: Scrape DHPP (different domain, no HTTP/2 issues)
+    const dhppDocs = await scrapeDhpp(dateFrom, dateTo);
+    console.log(`DHPP: ${dhppDocs.length} documents found`);
 
-    // Detect backdated docs
+    // Step 2: Scrape canada.ca pages SEQUENTIALLY with delays
+    const guidanceItems = await scrapeAllWhatsNewPages(dateFrom, dateTo);
+    const consultationItems = await scrapeConsultations(dateFrom, dateTo);
+    const medEffectItems = await scrapeMedEffectWhatsNew(dateFrom, dateTo);
+    const safetyData = await scrapeSafetyReviews(dateFrom, dateTo);
+
+    // Step 3: Detect backdated docs
     const backdatedDocs = await detectBackdated(dhppDocs, dateFrom, dateTo, supabase);
-
     const allDhppDocs = [...dhppDocs, ...backdatedDocs];
 
     console.log(`DHPP: ${dhppDocs.length} (+ ${backdatedDocs.length} backdated), Guidance: ${guidanceItems.length}, Consultations: ${consultationItems.length}, MedEffect: ${medEffectItems.length}, Safety periods: ${safetyData.periods.length}`);
 
-    // Enrich DHPP docs with indication summaries & therapeutic areas
+    // Enrich DHPP docs with indication summaries
     if (allDhppDocs.length > 0) {
       await enrichWithIndications(allDhppDocs, supabase);
     }
 
-    // Save snapshot for future backdating detection
+    // Save snapshot
     await saveSnapshot(dhppDocs, dateFrom, dateTo, supabase);
 
     // Merge consultations into guidance
