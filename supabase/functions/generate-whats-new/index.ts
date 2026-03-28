@@ -49,9 +49,6 @@ interface MedEffectItem {
 }
 
 // ---- Fetch with retry (sequential, avoids HTTP/2 errors) ----
-// Force HTTP/1.1 client for canada.ca to avoid HTTP/2 stream errors
-const http1Client = Deno.createHttpClient({ http2: false });
-
 async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response | null> {
   const isCanadaCa = url.includes('canada.ca');
   
@@ -67,14 +64,15 @@ async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response | n
         'Accept-Language': 'en-CA,en;q=0.9',
       };
       
-      const fetchOptions: RequestInit & { client?: Deno.HttpClient } = { headers };
+      let fetchUrl = url;
+      // canada.ca blocks edge function IPs; route through proxy
       if (isCanadaCa) {
-        fetchOptions.client = http1Client;
+        fetchUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
       }
       
-      const res = await fetch(url, fetchOptions);
+      const res = await fetch(fetchUrl, { headers });
       if (res.ok) return res;
-      console.error(`Fetch ${url} returned ${res.status}`);
+      console.error(`Fetch ${url} returned ${res.status} (attempt ${attempt + 1})`);
     } catch (err) {
       console.error(`Fetch attempt ${attempt + 1} for ${url}: ${err}`);
     }
