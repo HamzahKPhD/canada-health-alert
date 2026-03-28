@@ -27,6 +27,8 @@ interface DhppDocument {
   issued_date: string | null;
   updated_date: string | null;
   indication_summary: string | null;
+  therapeutic_area: string | null;
+  is_backdated: boolean;
 }
 
 interface GuidanceItem {
@@ -34,11 +36,12 @@ interface GuidanceItem {
   url: string;
   date: string;
   source: string;
+  therapeutic_area: string | null;
 }
 
 interface SafetyReviewPeriod {
   period: string;
-  reviews: { brand_name: string; ingredient: string; safety_issue: string; trigger: string }[];
+  reviews: { brand_name: string; ingredient: string; safety_issue: string; trigger: string; therapeutic_area: string | null }[];
   no_reviews_message: string | null;
 }
 
@@ -46,6 +49,7 @@ interface MedEffectItem {
   title: string;
   url: string;
   date: string;
+  therapeutic_area: string | null;
 }
 
 // ---- Utility ----
@@ -63,7 +67,31 @@ function isInRange(dateStr: string | null, from: string, to: string): boolean {
 function getPublicationDate(doc: DhppDocument): string | null {
   const dates = [doc.decision_date, doc.issued_date, doc.updated_date].filter(Boolean) as string[];
   if (dates.length === 0) return null;
-  return dates.sort().reverse()[0]; // most recent date
+  return dates.sort().reverse()[0];
+}
+
+function classifyTherapeuticArea(title: string, indication: string | null): string {
+  const text = `${title} ${indication || ''}`.toLowerCase();
+  
+  // CMC - Chemistry, Manufacturing, and Controls
+  if (/\b(chemistry|manufacturing|controls|cmc|formulation|stability|impurit|excipient|specification|analytical|dissolution|bioequivalence)\b/.test(text)) return 'CMC';
+  
+  // ONC - Oncology
+  if (/\b(cancer|oncolog|tumor|tumour|carcinoma|lymphoma|leukemia|leukaemia|melanoma|sarcoma|myeloma|neoplasm|chemotherapy|anti-cancer|antineoplastic|metasta|malignant|glioblastoma|immunotherapy for.*cancer|checkpoint inhibitor)\b/.test(text)) return 'ONC';
+  
+  // CVRM - Cardiovascular, Renal, and Metabolism
+  if (/\b(cardiovascular|cardiac|heart|hypertension|diabetes|diabet|insulin|renal|kidney|metaboli|cholesterol|lipid|statin|anticoagulant|thrombosis|atherosclerosis|arrhythmia|angina|myocardial|obesity|dyslipidemia|nephro|dialysis|glp-1|sglt2|dpp-4)\b/.test(text)) return 'CVRM';
+  
+  // CTA - Clinical Trials
+  if (/\b(clinical trial|cta |phase [i1-3]|investigational|trial application)\b/.test(text)) return 'CTA';
+  
+  // RAOE - Regulatory Affairs and Operations
+  if (/\b(regulatory|compliance|enforcement|inspection|recall|guidance|policy|label|labelling|monograph|form |notice|administrative|procedural)\b/.test(text)) return 'RAOE';
+  
+  // RV&IT - Vaccines and Infectious Diseases
+  if (/\b(vaccine|vaccin|infectious|infection|antiviral|antibiotic|antimicrobial|hiv|hepatitis|influenza|covid|sars|tuberculosis|malaria|fungal|antifungal|immunization|pandemic|pathogen|viral|bacteria)\b/.test(text)) return 'RV&IT';
+  
+  return 'OTHER';
 }
 
 // ---- DHPP Scraping ----
@@ -84,7 +112,6 @@ function parseDhppPage(html: string): DhppDocument[] {
     const titleMatch = block.match(/<a href="(https:\/\/dhpp\.hpfb-dgpsa\.ca\/review-documents\/resource\/[^"]+)">([^<]+)<\/a>/);
     if (!titleMatch) continue;
 
-    // Determine type from CSS class
     let type: 'RDS' | 'SBD' | 'SSR' = 'RDS';
     if (block.includes('review-document-sbd')) type = 'SBD';
     else if (block.includes('review-document-ssr')) type = 'SSR';
@@ -103,6 +130,8 @@ function parseDhppPage(html: string): DhppDocument[] {
       issued_date: parseDate(extractField(block, 'field-issued-date-1')),
       updated_date: parseDate(extractField(block, 'field-updated-date')),
       indication_summary: null,
+      therapeutic_area: null,
+      is_backdated: false,
     });
   }
   return documents;
@@ -122,7 +151,6 @@ async function scrapeDhpp(dateFrom: string, dateTo: string): Promise<DhppDocumen
       const docs = parseDhppPage(html);
       if (docs.length === 0) break;
 
-      // Check if we've gone past the date range
       let anyInOrAfterRange = false;
       for (const doc of docs) {
         const pubDate = getPublicationDate(doc);
@@ -133,7 +161,6 @@ async function scrapeDhpp(dateFrom: string, dateTo: string): Promise<DhppDocumen
           }
         }
       }
-      // If all docs on this page are before the range, stop
       if (!anyInOrAfterRange) break;
     } catch (err) {
       console.error(`DHPP page ${page} error:`, err);
@@ -141,6 +168,118 @@ async function scrapeDhpp(dateFrom: string, dateTo: string): Promise<DhppDocumen
     }
   }
   return allDocs;
+}
+
+// Scrape the previous 4 weeks for backdating detection
+async function scrapeDhppExtended(dateFrom: string): Promise<DhppDocument[]> {
+  // Go back 4 weeks from dateFrom
+  const extendedFrom = new Date(dateFrom + 'T00:00:00');
+  extendedFrom.setDate(extendedFrom.getDate() - 28);
+  const extFromStr = extendedFrom.toISOString().split('T')[0];
+  
+  const allDocs: DhppDocument[] = [];
+  const maxPages = 15;
+
+  for (let page = 0; page < maxPages; page++) {
+    const url = page === 0 ? DHPP_BASE : `${DHPP_BASE}?page=${page}`;
+    try {
+      const res = await fetch(url, { headers: FETCH_HEADERS });
+      if (!res.ok) break;
+      const html = await res.text();
+      const docs = parseDhppPage(html);
+      if (docs.length === 0) break;
+
+      let anyInOrAfterRange = false;
+      for (const doc of docs) {
+        const pubDate = getPublicationDate(doc);
+        if (pubDate && pubDate >= extFromStr) {
+          anyInOrAfterRange = true;
+          allDocs.push(doc);
+        }
+      }
+      if (!anyInOrAfterRange) break;
+    } catch (err) {
+      console.error(`DHPP extended page ${page} error:`, err);
+      break;
+    }
+  }
+  return allDocs;
+}
+
+// ---- Backdating detection ----
+async function detectBackdated(
+  currentDocs: DhppDocument[],
+  dateFrom: string,
+  dateTo: string,
+  supabase: ReturnType<typeof createClient>
+): Promise<DhppDocument[]> {
+  // Get all snapshot URLs from previous reports that overlap the 4-week lookback
+  const lookbackFrom = new Date(dateFrom + 'T00:00:00');
+  lookbackFrom.setDate(lookbackFrom.getDate() - 28);
+  const lookbackStr = lookbackFrom.toISOString().split('T')[0];
+
+  const { data: snapshots } = await supabase
+    .from('report_snapshots')
+    .select('document_urls, report_date_from, report_date_to')
+    .gte('report_date_to', lookbackStr)
+    .lt('report_date_from', dateFrom)
+    .order('created_at', { ascending: false });
+
+  if (!snapshots || snapshots.length === 0) {
+    console.log('No previous snapshots found for backdating detection');
+    return [];
+  }
+
+  // Collect all URLs that were in previous snapshots
+  const previousUrls = new Set<string>();
+  for (const snap of snapshots) {
+    const urls = snap.document_urls as string[];
+    if (Array.isArray(urls)) {
+      urls.forEach(u => previousUrls.add(u));
+    }
+  }
+
+  console.log(`Previous snapshots contain ${previousUrls.size} URLs`);
+
+  // Scrape extended range to find docs in previous date ranges
+  const extendedDocs = await scrapeDhppExtended(dateFrom);
+  
+  // Filter: docs that are in the previous date ranges but NOT in previous snapshots = backdated
+  const backdated: DhppDocument[] = [];
+  const currentUrlSet = new Set(currentDocs.map(d => d.url));
+
+  for (const doc of extendedDocs) {
+    const pubDate = getPublicationDate(doc);
+    if (!pubDate) continue;
+    // Skip docs already in current range
+    if (currentUrlSet.has(doc.url)) continue;
+    // Doc is in the previous 4 weeks range but not in our current range
+    if (pubDate >= lookbackStr && pubDate < dateFrom) {
+      // Was NOT in previous snapshots = it's backdated
+      if (!previousUrls.has(doc.url)) {
+        doc.is_backdated = true;
+        backdated.push(doc);
+      }
+    }
+  }
+
+  console.log(`Found ${backdated.length} backdated documents`);
+  return backdated;
+}
+
+// Save current snapshot
+async function saveSnapshot(
+  docs: DhppDocument[],
+  dateFrom: string,
+  dateTo: string,
+  supabase: ReturnType<typeof createClient>
+) {
+  const urls = docs.filter(d => !d.is_backdated).map(d => d.url);
+  await supabase.from('report_snapshots').insert({
+    report_date_from: dateFrom,
+    report_date_to: dateTo,
+    document_urls: urls,
+  });
 }
 
 // ---- Detail page + AI summary ----
@@ -184,7 +323,6 @@ async function getAiSummary(pageText: string, title: string): Promise<string | n
 }
 
 async function enrichWithIndications(docs: DhppDocument[], supabase: ReturnType<typeof createClient>): Promise<void> {
-  // Check DB for existing summaries
   const urls = docs.map(d => d.url);
   const { data: existing } = await supabase
     .from('review_documents')
@@ -200,7 +338,6 @@ async function enrichWithIndications(docs: DhppDocument[], supabase: ReturnType<
     }
   }
 
-  // Fill from DB cache
   const needFetch: DhppDocument[] = [];
   for (const doc of docs) {
     if (summaryMap.has(doc.url)) {
@@ -210,7 +347,6 @@ async function enrichWithIndications(docs: DhppDocument[], supabase: ReturnType<
     }
   }
 
-  // Fetch detail pages for remaining (limit to avoid timeout)
   const toProcess = needFetch.slice(0, 8);
   console.log(`Fetching ${toProcess.length} detail pages for AI summaries`);
 
@@ -230,35 +366,45 @@ async function enrichWithIndications(docs: DhppDocument[], supabase: ReturnType<
       doc.indication_summary = 'Not available for this document type';
     }
   }));
+
+  // Classify therapeutic areas for all docs
+  for (const doc of docs) {
+    doc.therapeutic_area = classifyTherapeuticArea(doc.title, doc.indication_summary);
+  }
 }
 
 // ---- What's New pages scraping ----
-function parseWhatsNewPage(text: string, dateFrom: string, dateTo: string, source: string): GuidanceItem[] {
+function parseHtmlWhatsNew(html: string, dateFrom: string, dateTo: string, source: string): GuidanceItem[] {
   const items: GuidanceItem[] = [];
-  // Match lines like: - [title](url) [YYYY-MM-DD] or [title](url)[YYYY-MM-DD]
-  const regex = /- \[([^\]]+)\]\(([^)]+)\)\s*\[?(\d{4}-\d{2}-\d{2})\]?/g;
+  const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
   let match;
-  while ((match = regex.exec(text)) !== null) {
-    const date = match[3];
+  while ((match = liRegex.exec(html)) !== null) {
+    const content = match[1];
+    const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/);
+    const dateMatch = content.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+    if (!linkMatch || !dateMatch) continue;
+
+    const date = dateMatch[1];
     if (!isInRange(date, dateFrom, dateTo)) continue;
 
-    const title = match[1];
-    // Filter out noise items per SOP
+    const title = linkMatch[2].trim();
+    const url = linkMatch[1];
+
     const skipPatterns = [
       'Multiple additions to the Prescription Drug List',
       'Updated List of Drugs for an Urgent Public Health Need',
       'Updated Register of Certificates of Supplementary Protection',
-      'Information pertaining to Medical Devices',
+      'Medical Devices',
       'Register for Innovative Drugs',
-      'Notice of Compliance (NOC) Data Extract',
       'NOC Data Extract',
+      'Notice of Compliance (NOC) Data Extract',
       'DPD Extract',
       'Product Monograph Brand Safety Updates',
       'Summary Basis of Decision',
     ];
     if (skipPatterns.some(p => title.includes(p))) continue;
 
-    items.push({ title, url: match[2], date, source });
+    items.push({ title, url, date, source, therapeutic_area: classifyTherapeuticArea(title, null) });
   }
   return items;
 }
@@ -275,17 +421,6 @@ async function scrapeWhatsNewPages(dateFrom: string, dateTo: string): Promise<Gu
       const res = await fetch(url, { headers: FETCH_HEADERS });
       if (!res.ok) return [];
       const html = await res.text();
-      // Convert HTML to simplified text for parsing
-      const text = html.replace(/<[^>]+>/g, (tag) => {
-        if (tag.startsWith('<a ')) {
-          const href = tag.match(/href="([^"]+)"/);
-          return href ? `](${href[1]})` : '';
-        }
-        if (tag === '</a>') return '';
-        if (tag === '<li>') return '- [';
-        return '';
-      });
-      // Actually, let me parse the HTML more carefully
       return parseHtmlWhatsNew(html, dateFrom, dateTo, source);
     } catch (err) {
       console.error(`Error scraping ${source}:`, err);
@@ -296,42 +431,65 @@ async function scrapeWhatsNewPages(dateFrom: string, dateTo: string): Promise<Gu
   return results.flat();
 }
 
-function parseHtmlWhatsNew(html: string, dateFrom: string, dateTo: string, source: string): GuidanceItem[] {
-  const items: GuidanceItem[] = [];
-  // Match list items with links and dates
-  // Pattern: <li><a href="URL">Title</a> [DATE]</li> or similar variations
-  const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-  let match;
-  while ((match = liRegex.exec(html)) !== null) {
-    const content = match[1];
-    const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/);
-    const dateMatch = content.match(/\[(\d{4}-\d{2}-\d{2})\]/);
-    if (!linkMatch || !dateMatch) continue;
+// ---- Consultations scraping ----
+async function scrapeConsultations(dateFrom: string, dateTo: string): Promise<GuidanceItem[]> {
+  try {
+    const url = 'https://www.canada.ca/en/health-canada/services/drugs-health-products/public-involvement-consultations/current-past-consultations.html';
+    const res = await fetch(url, { headers: FETCH_HEADERS });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const items: GuidanceItem[] = [];
 
-    const date = dateMatch[1];
-    if (!isInRange(date, dateFrom, dateTo)) continue;
+    // Parse consultation items - look for end dates
+    const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    let match;
+    while ((match = liRegex.exec(html)) !== null) {
+      const content = match[1];
+      const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+      if (!linkMatch) continue;
 
-    const title = linkMatch[2].trim();
-    const url = linkMatch[1];
+      const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+      const itemUrl = linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`;
 
-    // Filter noise
-    const skipPatterns = [
-      'Multiple additions to the Prescription Drug List',
-      'Updated List of Drugs for an Urgent Public Health Need',
-      'Updated Register of Certificates of Supplementary Protection',
-      'Medical Devices',
-      'Register for Innovative Drugs',
-      'NOC Data Extract',
-      'Notice of Compliance (NOC) Data Extract',
-      'DPD Extract',
-      'Product Monograph Brand Safety Updates',
-      'Summary Basis of Decision',
-    ];
-    if (skipPatterns.some(p => title.includes(p))) continue;
+      // Look for end date patterns
+      const endDatePatterns = [
+        /(?:end|closing|close|deadline)[^:]*:\s*(\d{4}-\d{2}-\d{2})/i,
+        /(?:end|closing|close|deadline)[^:]*:\s*(\w+ \d{1,2},?\s*\d{4})/i,
+        /to\s+(\d{4}-\d{2}-\d{2})/i,
+      ];
 
-    items.push({ title, url, date, source });
+      let endDate: string | null = null;
+      for (const pat of endDatePatterns) {
+        const m = content.match(pat);
+        if (m) {
+          endDate = parseDate(m[1]);
+          if (!endDate) {
+            // Try parsing natural date
+            try {
+              const d = new Date(m[1]);
+              if (!isNaN(d.getTime())) endDate = d.toISOString().split('T')[0];
+            } catch { /* skip */ }
+          }
+          break;
+        }
+      }
+
+      // Also check for any date in brackets
+      if (!endDate) {
+        const dateMatch = content.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+        if (dateMatch) endDate = dateMatch[1];
+      }
+
+      // Include if end date falls in range
+      if (endDate && isInRange(endDate, dateFrom, dateTo)) {
+        items.push({ title, url: itemUrl, date: endDate, source: 'Consultations', therapeutic_area: classifyTherapeuticArea(title, null) });
+      }
+    }
+    return items;
+  } catch (err) {
+    console.error('Consultations scraping error:', err);
+    return [];
   }
-  return items;
 }
 
 // ---- MedEffect scraping ----
@@ -350,10 +508,12 @@ async function scrapeMedEffectWhatsNew(dateFrom: string, dateTo: string): Promis
       if (!linkMatch || !dateMatch) continue;
       const date = dateMatch[1];
       if (!isInRange(date, dateFrom, dateTo)) continue;
+      const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
       items.push({
-        title: linkMatch[2].replace(/<[^>]+>/g, '').trim(),
+        title,
         url: linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`,
         date,
+        therapeutic_area: classifyTherapeuticArea(title, null),
       });
     }
     return items;
@@ -369,26 +529,17 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
     if (!res.ok) return { periods: [], raw_html_snippet: '' };
     const html = await res.text();
 
-    // Extract the text content for parsing
     const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-
     const periods: SafetyReviewPeriod[] = [];
 
-    // Find period headers: "List of Safety and Effectiveness Reviews Initiated from YYYY-MM-DD to YYYY-MM-DD"
     const periodRegex = /List of Safety and Effectiveness Reviews Initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
     let periodMatch;
-    const periodPositions: { start: number; end: number; periodFrom: string; periodTo: string }[] = [];
+    const periodPositions: { periodFrom: string; periodTo: string }[] = [];
 
     while ((periodMatch = periodRegex.exec(text)) !== null) {
-      periodPositions.push({
-        start: periodMatch.index,
-        end: periodMatch.index + periodMatch[0].length,
-        periodFrom: periodMatch[1],
-        periodTo: periodMatch[2],
-      });
+      periodPositions.push({ periodFrom: periodMatch[1], periodTo: periodMatch[2] });
     }
 
-    // Also check for "No safety and effectiveness reviews" messages  
     const noReviewRegex = /No safety and effectiveness reviews initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
     let noMatch;
     const noReviewPeriods: { from: string; to: string }[] = [];
@@ -396,22 +547,10 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
       noReviewPeriods.push({ from: noMatch[1], to: noMatch[2] });
     }
 
-    // Parse HTML tables for safety reviews
-    const tableRegex = /<table[^>]*>([\s\S]*?)<\/table>/gi;
-    let tableMatch;
-    const tables: { html: string; pos: number }[] = [];
-    while ((tableMatch = tableRegex.exec(html)) !== null) {
-      tables.push({ html: tableMatch[0], pos: tableMatch.index });
-    }
-
-    // For each period, check if it overlaps with the date range
     for (const period of periodPositions) {
-      // Check if this period overlaps with our date range
       if (period.periodTo < dateFrom || period.periodFrom > dateTo) continue;
 
       const periodLabel = `${period.periodFrom} to ${period.periodTo}`;
-
-      // Check if there's a "no reviews" message for this period
       const noReview = noReviewPeriods.find(nr => nr.from === period.periodFrom);
       if (noReview) {
         periods.push({
@@ -422,15 +561,10 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
         continue;
       }
 
-      // Find the table associated with this period (the next table after the period header in the HTML)
-      // Parse table rows
       const reviews: SafetyReviewPeriod['reviews'] = [];
-
-      // Find the corresponding section in original HTML
       const periodHeaderInHtml = html.indexOf(`List of Safety and Effectiveness Reviews Initiated from ${period.periodFrom} to ${period.periodTo}`);
       if (periodHeaderInHtml === -1) continue;
 
-      // Find the next table after this header
       const nextTableStart = html.indexOf('<table', periodHeaderInHtml);
       if (nextTableStart === -1) continue;
       const nextTableEnd = html.indexOf('</table>', nextTableStart);
@@ -441,7 +575,7 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
       let rowMatch;
       let isHeader = true;
       while ((rowMatch = rowRegex.exec(tableHtml)) !== null) {
-        if (isHeader) { isHeader = false; continue; } // skip header row
+        if (isHeader) { isHeader = false; continue; }
         const cells: string[] = [];
         const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
         let cellMatch;
@@ -454,6 +588,7 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
             ingredient: cells[1],
             safety_issue: cells[2],
             trigger: cells[3],
+            therapeutic_area: classifyTherapeuticArea(cells[0], cells[2]),
           });
         }
       }
@@ -491,24 +626,36 @@ Deno.serve(async (req) => {
     );
 
     // Run all scraping in parallel
-    const [dhppDocs, guidanceItems, medEffectItems, safetyData] = await Promise.all([
+    const [dhppDocs, guidanceItems, consultationItems, medEffectItems, safetyData] = await Promise.all([
       scrapeDhpp(dateFrom, dateTo),
       scrapeWhatsNewPages(dateFrom, dateTo),
+      scrapeConsultations(dateFrom, dateTo),
       scrapeMedEffectWhatsNew(dateFrom, dateTo),
       scrapeSafetyReviews(dateFrom, dateTo),
     ]);
 
-    console.log(`DHPP: ${dhppDocs.length}, Guidance: ${guidanceItems.length}, MedEffect: ${medEffectItems.length}, Safety periods: ${safetyData.periods.length}`);
+    // Detect backdated docs
+    const backdatedDocs = await detectBackdated(dhppDocs, dateFrom, dateTo, supabase);
 
-    // Enrich DHPP docs with indication summaries
-    if (dhppDocs.length > 0) {
-      await enrichWithIndications(dhppDocs, supabase);
+    const allDhppDocs = [...dhppDocs, ...backdatedDocs];
+
+    console.log(`DHPP: ${dhppDocs.length} (+ ${backdatedDocs.length} backdated), Guidance: ${guidanceItems.length}, Consultations: ${consultationItems.length}, MedEffect: ${medEffectItems.length}, Safety periods: ${safetyData.periods.length}`);
+
+    // Enrich DHPP docs with indication summaries & therapeutic areas
+    if (allDhppDocs.length > 0) {
+      await enrichWithIndications(allDhppDocs, supabase);
     }
+
+    // Save snapshot for future backdating detection
+    await saveSnapshot(dhppDocs, dateFrom, dateTo, supabase);
+
+    // Merge consultations into guidance
+    const allGuidance = [...guidanceItems, ...consultationItems];
 
     const report = {
       date_range: { from: dateFrom, to: dateTo },
-      transparency_documents: dhppDocs,
-      guidance_documents: guidanceItems,
+      transparency_documents: allDhppDocs,
+      guidance_documents: allGuidance,
       medeffect_whats_new: medEffectItems,
       safety_reviews: safetyData.periods,
     };

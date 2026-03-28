@@ -14,6 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      report_snapshots: {
+        Row: {
+          created_at: string
+          document_urls: Json
+          id: string
+          report_date_from: string
+          report_date_to: string
+        }
+        Insert: {
+          created_at?: string
+          document_urls?: Json
+          id?: string
+          report_date_from: string
+          report_date_to: string
+        }
+        Update: {
+          created_at?: string
+          document_urls?: Json
+          id?: string
+          report_date_from?: string
+          report_date_to?: string
+        }
+        Relationships: []
+      }
       review_documents: {
         Row: {
           control_number: string | null

@@ -15,8 +15,10 @@ import {
   ExternalLink,
   AlertTriangle,
   BookOpen,
+  Clock,
 } from "lucide-react";
 
+// ---- Types ----
 interface DhppDocument {
   type: "RDS" | "SBD" | "SSR";
   title: string;
@@ -31,6 +33,8 @@ interface DhppDocument {
   issued_date: string | null;
   updated_date: string | null;
   indication_summary: string | null;
+  therapeutic_area: string | null;
+  is_backdated: boolean;
 }
 
 interface GuidanceItem {
@@ -38,6 +42,7 @@ interface GuidanceItem {
   url: string;
   date: string;
   source: string;
+  therapeutic_area: string | null;
 }
 
 interface SafetyReviewPeriod {
@@ -47,6 +52,7 @@ interface SafetyReviewPeriod {
     ingredient: string;
     safety_issue: string;
     trigger: string;
+    therapeutic_area: string | null;
   }[];
   no_reviews_message: string | null;
 }
@@ -55,6 +61,7 @@ interface MedEffectItem {
   title: string;
   url: string;
   date: string;
+  therapeutic_area: string | null;
 }
 
 interface Report {
@@ -65,22 +72,30 @@ interface Report {
   safety_reviews: SafetyReviewPeriod[];
 }
 
+const TA_COLORS: Record<string, string> = {
+  CMC: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  CVRM: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  CTA: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+  ONC: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+  RAOE: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+  "RV&IT": "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
+  OTHER: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200",
+};
+
 function getDefaultDates() {
   const to = new Date();
   const from = new Date();
   from.setDate(from.getDate() - 14);
-  return {
-    from: from.toISOString().split("T")[0],
-    to: to.toISOString().split("T")[0],
-  };
+  return { from: from.toISOString().split("T")[0], to: to.toISOString().split("T")[0] };
 }
 
 function formatDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-CA", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  return new Date(d + "T00:00:00").toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function TaBadge({ ta }: { ta: string | null }) {
+  if (!ta) return null;
+  return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${TA_COLORS[ta] || TA_COLORS.OTHER}`}>{ta}</span>;
 }
 
 function CopyButton({ getText }: { getText: () => string }) {
@@ -92,47 +107,53 @@ function CopyButton({ getText }: { getText: () => string }) {
   };
   return (
     <Button variant="ghost" size="sm" onClick={handleCopy} className="gap-1.5">
-      {copied ? (
-        <ClipboardCheck className="h-3.5 w-3.5 text-[hsl(var(--new-badge))]" />
-      ) : (
-        <Clipboard className="h-3.5 w-3.5" />
-      )}
+      {copied ? <ClipboardCheck className="h-3.5 w-3.5 text-green-600" /> : <Clipboard className="h-3.5 w-3.5" />}
       {copied ? "Copied" : "Copy"}
     </Button>
   );
 }
 
+function ReviewerInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <Input
+      placeholder="Reviewer name"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-7 text-xs w-32"
+    />
+  );
+}
+
+// ---- Text formatters ----
 function formatTransparencyText(docs: DhppDocument[]): string {
   if (docs.length === 0) return "No transparency documents found for this period.";
-  return docs
-    .map((doc) => {
-      const lines = [doc.title, doc.url];
-      if (doc.product_type) lines.push(`Product Type: ${doc.product_type}`);
-      if (doc.control_number) lines.push(`Control Number: ${doc.control_number}`);
-      if (doc.din) lines.push(`DIN(s): ${doc.din}`);
-      if (doc.manufacturer) lines.push(`Manufacturer: ${doc.manufacturer}`);
-      if (doc.submission_type) lines.push(`Submission Type: ${doc.submission_type}`);
-      if (doc.date_filed) lines.push(`Date Filed / Submission Date: ${doc.date_filed}`);
-      if (doc.decision_date) lines.push(`Decision / Authorization Date: ${doc.decision_date}`);
-      if (doc.issued_date) lines.push(`Issued / Original Publication Date: ${doc.issued_date}`);
-      if (doc.indication_summary && doc.indication_summary !== "Not available for this document type") {
-        lines.push(`Indication: ${doc.indication_summary}`);
-      }
-      return lines.join("\n");
-    })
-    .join("\n\n");
+  return docs.map((doc) => {
+    const lines = [`${doc.is_backdated ? "[BACKDATED] " : ""}${doc.title}`, doc.url];
+    if (doc.therapeutic_area) lines.push(`Therapeutic Area: ${doc.therapeutic_area}`);
+    if (doc.product_type) lines.push(`Product Type: ${doc.product_type}`);
+    if (doc.control_number) lines.push(`Control Number: ${doc.control_number}`);
+    if (doc.din) lines.push(`DIN(s): ${doc.din}`);
+    if (doc.manufacturer) lines.push(`Manufacturer: ${doc.manufacturer}`);
+    if (doc.submission_type) lines.push(`Submission Type: ${doc.submission_type}`);
+    if (doc.date_filed) lines.push(`Date Filed: ${doc.date_filed}`);
+    if (doc.decision_date) lines.push(`Authorization Date: ${doc.decision_date}`);
+    if (doc.issued_date) lines.push(`Issued Date: ${doc.issued_date}`);
+    if (doc.indication_summary && doc.indication_summary !== "Not available for this document type")
+      lines.push(`Indication: ${doc.indication_summary}`);
+    return lines.join("\n");
+  }).join("\n\n");
 }
 
 function formatGuidanceText(items: GuidanceItem[]): string {
   if (items.length === 0) return "No guidance documents found for this period.";
-  return items.map((item) => `${item.title} [${item.date}]\n${item.url}\n(Source: ${item.source})`).join("\n\n");
+  return items.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}\n(Source: ${i.source})`).join("\n\n");
 }
 
 function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[]): string {
   const parts: string[] = [];
   if (medeffect.length > 0) {
     parts.push("MedEffect What's New:");
-    parts.push(...medeffect.map((i) => `${i.title} [${i.date}]\n${i.url}`));
+    parts.push(...medeffect.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}`));
   }
   if (periods.length > 0) {
     parts.push("\nSafety and Effectiveness Reviews:");
@@ -140,9 +161,9 @@ function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPerio
       if (p.no_reviews_message) {
         parts.push(p.no_reviews_message);
       } else if (p.reviews.length > 0) {
-        parts.push(`\nList of Safety and Effectiveness Reviews Initiated from ${p.period}:`);
+        parts.push(`\nReviews from ${p.period}:`);
         for (const r of p.reviews) {
-          parts.push(`• ${r.brand_name} (${r.ingredient}) — ${r.safety_issue} [Trigger: ${r.trigger}]`);
+          parts.push(`• ${r.brand_name} (${r.ingredient}) — ${r.safety_issue} [Trigger: ${r.trigger}]${r.therapeutic_area ? ` (${r.therapeutic_area})` : ""}`);
         }
       }
     }
@@ -151,20 +172,25 @@ function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPerio
   return parts.join("\n");
 }
 
-function formatFullReport(report: Report): string {
+function formatFullReport(report: Report, reviewers: Record<string, string>): string {
   const header = `Health Canada What's New — ${formatDate(report.date_range.from)} to ${formatDate(report.date_range.to)}`;
   const sep = "=".repeat(60);
+
+  // Add reviewer assignments
+  const reviewerSection = Object.entries(reviewers).filter(([, v]) => v).map(([url, name]) => `${url}: ${name}`);
+  const reviewerText = reviewerSection.length > 0 ? `\n\nReviewer Assignments:\n${reviewerSection.join("\n")}` : "";
+
   return [
-    header,
-    sep,
-    "\na. List of transparency documents posted for assessment of any TA-related follow up actions:\n",
+    header, sep,
+    "\na. Transparency Documents (RDS / SBD / SSR):\n",
     formatTransparencyText(report.transparency_documents),
     `\n${sep}`,
-    "\nb. List of draft/final guidance documents, notices, ICH documents, consultation documents, new forms where follow up action may be required:\n",
+    "\nb. Guidance Documents, Notices, ICH, Consultations:\n",
     formatGuidanceText(report.guidance_documents),
     `\n${sep}`,
-    "\nc. Health Canada-conducted safety reviews posted on MedEffect:\n",
+    "\nc. MedEffect Safety Reviews:\n",
     formatSafetyText(report.medeffect_whats_new, report.safety_reviews),
+    reviewerText,
   ].join("\n");
 }
 
@@ -174,7 +200,12 @@ export default function WhatsNew() {
   const [dateTo, setDateTo] = useState(defaults.to);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
+  const [reviewers, setReviewers] = useState<Record<string, string>>({});
   const { toast } = useToast();
+
+  const setReviewer = (url: string, name: string) => {
+    setReviewers((prev) => ({ ...prev, [url]: name }));
+  };
 
   async function handleGenerate() {
     if (!dateFrom || !dateTo) {
@@ -192,19 +223,17 @@ export default function WhatsNew() {
       setReport(data as Report);
       toast({
         title: "Report generated",
-        description: `Found ${data.transparency_documents.length} transparency docs, ${data.guidance_documents.length} guidance items, ${data.medeffect_whats_new.length} MedEffect items.`,
+        description: `${data.transparency_documents.length} transparency docs, ${data.guidance_documents.length} guidance items, ${data.medeffect_whats_new.length} MedEffect items.`,
       });
     } catch (err) {
       console.error("Report error:", err);
-      toast({
-        title: "Generation failed",
-        description: err instanceof Error ? err.message : "Unknown error",
-        variant: "destructive",
-      });
+      toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
     } finally {
       setLoading(false);
     }
   }
+
+  const backdatedCount = report?.transparency_documents.filter((d) => d.is_backdated).length || 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -214,9 +243,7 @@ export default function WhatsNew() {
             <ShieldCheck className="h-7 w-7 text-primary" />
             <h1 className="text-2xl font-bold tracking-tight">What's New Report Generator</h1>
           </div>
-          <p className="text-muted-foreground text-sm ml-10">
-            Generate SOP-compliant What's New intel screening reports
-          </p>
+          <p className="text-muted-foreground text-sm ml-10">Generate SOP-compliant What's New intel screening reports</p>
           <div className="mt-3 ml-10">
             <Link to="/" className="text-sm text-primary hover:text-primary/80 transition-colors font-medium">← Back to Monitor</Link>
           </div>
@@ -224,7 +251,7 @@ export default function WhatsNew() {
       </header>
 
       <main className="container max-w-5xl mx-auto px-4 py-6 space-y-6">
-        {/* Date Range Input */}
+        {/* Date Range */}
         <Card className="p-5">
           <div className="flex flex-col sm:flex-row items-end gap-4">
             <div className="flex-1 w-full">
@@ -236,35 +263,23 @@ export default function WhatsNew() {
               <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </div>
             <Button onClick={handleGenerate} disabled={loading} className="shrink-0 w-full sm:w-auto">
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <FileText className="h-4 w-4 mr-2" />
-                  Generate Report
-                </>
-              )}
+              {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>) : (<><FileText className="h-4 w-4 mr-2" />Generate Report</>)}
             </Button>
           </div>
-          {loading && (
-            <p className="text-sm text-muted-foreground mt-3 animate-pulse">
-              Scraping Health Canada websites... this may take 30-60 seconds.
-            </p>
-          )}
+          {loading && <p className="text-sm text-muted-foreground mt-3 animate-pulse">Scraping Health Canada websites... this may take 30-60 seconds.</p>}
         </Card>
 
-        {/* Report Output */}
+        {/* Report */}
         {report && (
           <div className="space-y-6">
-            {/* Full Report Copy */}
             <div className="flex justify-between items-center">
-              <h2 className="text-lg font-semibold">
-                Report: {formatDate(report.date_range.from)} — {formatDate(report.date_range.to)}
-              </h2>
-              <CopyButton getText={() => formatFullReport(report)} />
+              <h2 className="text-lg font-semibold">Report: {formatDate(report.date_range.from)} — {formatDate(report.date_range.to)}</h2>
+              <CopyButton getText={() => formatFullReport(report, reviewers)} />
+            </div>
+
+            {/* TA Legend */}
+            <div className="flex flex-wrap gap-2 text-xs">
+              {Object.keys(TA_COLORS).map((ta) => (<TaBadge key={ta} ta={ta} />))}
             </div>
 
             {/* Section A: Transparency Documents */}
@@ -272,46 +287,37 @@ export default function WhatsNew() {
               <div className="flex items-center justify-between p-4 bg-muted/50 border-b border-border/60">
                 <div className="flex items-center gap-2">
                   <BookOpen className="h-4 w-4 text-primary" />
-                  <h3 className="font-semibold text-sm">
-                    a. Transparency Documents (RDS / SBD / SSR)
-                  </h3>
-                  <Badge variant="secondary" className="text-xs">
-                    {report.transparency_documents.length}
-                  </Badge>
+                  <h3 className="font-semibold text-sm">a. Transparency Documents (RDS / SBD / SSR)</h3>
+                  <Badge variant="secondary" className="text-xs">{report.transparency_documents.length}</Badge>
+                  {backdatedCount > 0 && (
+                    <Badge variant="destructive" className="text-xs gap-1"><Clock className="h-3 w-3" />{backdatedCount} backdated</Badge>
+                  )}
                 </div>
                 <CopyButton getText={() => formatTransparencyText(report.transparency_documents)} />
               </div>
               <div className="p-4 space-y-4">
                 {report.transparency_documents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No transparency documents found for this period.</p>
+                  <p className="text-sm text-muted-foreground">No transparency documents found.</p>
                 ) : (
                   report.transparency_documents.map((doc, i) => (
-                    <div key={i} className="border-b border-border/30 pb-4 last:border-0 last:pb-0">
+                    <div key={i} className={`border-b border-border/30 pb-4 last:border-0 last:pb-0 ${doc.is_backdated ? "bg-amber-50 dark:bg-amber-950/20 -mx-4 px-4 py-3 rounded" : ""}`}>
                       <div className="flex items-start gap-2 mb-2">
-                        <Badge
-                          variant={doc.type === "SSR" ? "destructive" : "secondary"}
-                          className="text-xs shrink-0 mt-0.5"
-                        >
-                          {doc.type}
-                        </Badge>
-                        <a
-                          href={doc.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm font-medium text-foreground hover:text-primary transition-colors"
-                        >
-                          {doc.title}
-                          <ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
+                        <Badge variant={doc.type === "SSR" ? "destructive" : "secondary"} className="text-xs shrink-0 mt-0.5">{doc.type}</Badge>
+                        <TaBadge ta={doc.therapeutic_area} />
+                        {doc.is_backdated && <Badge variant="outline" className="text-xs shrink-0 mt-0.5 border-amber-500 text-amber-700 dark:text-amber-400 gap-1"><Clock className="h-3 w-3" />Backdated</Badge>}
+                        <a href={doc.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-foreground hover:text-primary transition-colors flex-1">
+                          {doc.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
                         </a>
+                        <ReviewerInput value={reviewers[doc.url] || ""} onChange={(v) => setReviewer(doc.url, v)} />
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-xs text-muted-foreground ml-12">
                         {doc.product_type && <div><span className="font-medium">Product Type:</span> {doc.product_type}</div>}
-                        {doc.control_number && <div><span className="font-medium">Control Number:</span> {doc.control_number}</div>}
+                        {doc.control_number && <div><span className="font-medium">Control #:</span> {doc.control_number}</div>}
                         {doc.din && <div><span className="font-medium">DIN(s):</span> {doc.din}</div>}
                         {doc.manufacturer && <div><span className="font-medium">Manufacturer:</span> {doc.manufacturer}</div>}
                         {doc.submission_type && <div><span className="font-medium">Submission Type:</span> {doc.submission_type}</div>}
                         {doc.date_filed && <div><span className="font-medium">Date Filed:</span> {doc.date_filed}</div>}
-                        {doc.decision_date && <div><span className="font-medium">Decision / Authorization Date:</span> {doc.decision_date}</div>}
+                        {doc.decision_date && <div><span className="font-medium">Authorization Date:</span> {doc.decision_date}</div>}
                         {doc.issued_date && <div><span className="font-medium">Issued Date:</span> {doc.issued_date}</div>}
                       </div>
                       {doc.indication_summary && doc.indication_summary !== "Not available for this document type" && (
@@ -331,36 +337,26 @@ export default function WhatsNew() {
               <div className="flex items-center justify-between p-4 bg-muted/50 border-b border-border/60">
                 <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 text-primary" />
-                  <h3 className="font-semibold text-sm">
-                    b. Guidance Documents, Notices, ICH, Consultations
-                  </h3>
-                  <Badge variant="secondary" className="text-xs">
-                    {report.guidance_documents.length}
-                  </Badge>
+                  <h3 className="font-semibold text-sm">b. Guidance, Notices, ICH, Consultations</h3>
+                  <Badge variant="secondary" className="text-xs">{report.guidance_documents.length}</Badge>
                 </div>
                 <CopyButton getText={() => formatGuidanceText(report.guidance_documents)} />
               </div>
               <div className="p-4 space-y-3">
                 {report.guidance_documents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No guidance documents found for this period.</p>
+                  <p className="text-sm text-muted-foreground">No guidance documents found.</p>
                 ) : (
                   report.guidance_documents.map((item, i) => (
                     <div key={i} className="flex items-start gap-3 text-sm">
-                      <Badge variant="outline" className="text-xs shrink-0 mt-0.5">
-                        {item.source}
-                      </Badge>
-                      <div>
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-foreground hover:text-primary transition-colors"
-                        >
-                          {item.title}
-                          <ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
+                      <Badge variant="outline" className="text-xs shrink-0 mt-0.5">{item.source}</Badge>
+                      <TaBadge ta={item.therapeutic_area} />
+                      <div className="flex-1">
+                        <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
+                          {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
                         </a>
                         <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
                       </div>
+                      <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
                     </div>
                   ))
                 )}
@@ -380,58 +376,52 @@ export default function WhatsNew() {
                 <CopyButton getText={() => formatSafetyText(report.medeffect_whats_new, report.safety_reviews)} />
               </div>
               <div className="p-4 space-y-4">
-                {/* MedEffect What's New items */}
                 {report.medeffect_whats_new.length > 0 && (
                   <div>
                     <h4 className="text-xs font-semibold text-foreground mb-2">MedEffect What's New</h4>
                     {report.medeffect_whats_new.map((item, i) => (
-                      <div key={i} className="text-sm mb-2">
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-foreground hover:text-primary transition-colors"
-                        >
-                          {item.title}
-                          <ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
-                        </a>
-                        <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                      <div key={i} className="text-sm mb-2 flex items-start gap-2">
+                        <TaBadge ta={item.therapeutic_area} />
+                        <div className="flex-1">
+                          <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
+                            {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
+                          </a>
+                          <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                        </div>
+                        <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
                       </div>
                     ))}
                   </div>
                 )}
 
-                {/* Safety Review Periods */}
                 {report.safety_reviews.length > 0 && (
                   <div>
-                    <h4 className="text-xs font-semibold text-foreground mb-2">
-                      Safety and Effectiveness Reviews
-                    </h4>
+                    <h4 className="text-xs font-semibold text-foreground mb-2">Safety and Effectiveness Reviews</h4>
                     {report.safety_reviews.map((period, i) => (
                       <div key={i} className="mb-4">
-                        <p className="text-xs font-medium text-muted-foreground mb-1">
-                          Reviews initiated from {period.period}:
-                        </p>
+                        <p className="text-xs font-medium text-muted-foreground mb-1">Reviews from {period.period}:</p>
                         {period.no_reviews_message ? (
                           <p className="text-xs text-muted-foreground italic">{period.no_reviews_message}</p>
                         ) : period.reviews.length > 0 ? (
                           <div className="overflow-x-auto">
                             <table className="w-full text-xs border border-border/60 rounded">
-                              <thead>
-                                <tr className="bg-muted/50">
-                                  <th className="text-left p-2 font-medium">Brand Name</th>
-                                  <th className="text-left p-2 font-medium">Ingredient(s)</th>
-                                  <th className="text-left p-2 font-medium">Safety Issue</th>
-                                  <th className="text-left p-2 font-medium">Trigger</th>
-                                </tr>
-                              </thead>
+                              <thead><tr className="bg-muted/50">
+                                <th className="text-left p-2 font-medium">TA</th>
+                                <th className="text-left p-2 font-medium">Brand Name</th>
+                                <th className="text-left p-2 font-medium">Ingredient(s)</th>
+                                <th className="text-left p-2 font-medium">Safety Issue</th>
+                                <th className="text-left p-2 font-medium">Trigger</th>
+                                <th className="text-left p-2 font-medium">Reviewer</th>
+                              </tr></thead>
                               <tbody>
                                 {period.reviews.map((r, j) => (
                                   <tr key={j} className="border-t border-border/30">
+                                    <td className="p-2"><TaBadge ta={r.therapeutic_area} /></td>
                                     <td className="p-2">{r.brand_name}</td>
                                     <td className="p-2">{r.ingredient}</td>
                                     <td className="p-2">{r.safety_issue}</td>
                                     <td className="p-2">{r.trigger}</td>
+                                    <td className="p-2"><ReviewerInput value={reviewers[`safety-${i}-${j}`] || ""} onChange={(v) => setReviewer(`safety-${i}-${j}`, v)} /></td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -446,7 +436,7 @@ export default function WhatsNew() {
                 )}
 
                 {report.medeffect_whats_new.length === 0 && report.safety_reviews.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No safety reviews found for this period.</p>
+                  <p className="text-sm text-muted-foreground">No safety reviews found.</p>
                 )}
               </div>
             </Card>
