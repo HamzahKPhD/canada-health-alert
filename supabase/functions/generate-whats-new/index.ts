@@ -49,28 +49,30 @@ interface MedEffectItem {
 }
 
 // ---- Fetch with retry (sequential, avoids HTTP/2 errors) ----
+// Force HTTP/1.1 client for canada.ca to avoid HTTP/2 stream errors
+const http1Client = Deno.createHttpClient({ http2: false });
+
 async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response | null> {
   const isCanadaCa = url.includes('canada.ca');
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       if (attempt > 0) {
-        await new Promise(r => setTimeout(r, 2000 * attempt));
+        await new Promise(r => setTimeout(r, 1500 * attempt));
       }
       
-      let fetchUrl = url;
       const headers: Record<string, string> = {
         'User-Agent': USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-CA,en;q=0.9',
       };
       
-      // canada.ca blocks HTTP/2 from edge functions; use allorigins proxy
+      const fetchOptions: RequestInit & { client?: Deno.HttpClient } = { headers };
       if (isCanadaCa) {
-        fetchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+        fetchOptions.client = http1Client;
       }
       
-      const res = await fetch(fetchUrl, { headers });
+      const res = await fetch(url, fetchOptions);
       if (res.ok) return res;
       console.error(`Fetch ${url} returned ${res.status}`);
     } catch (err) {
