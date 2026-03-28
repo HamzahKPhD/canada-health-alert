@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { NavLink } from "@/components/NavLink";
+import { AppNavLink } from "@/components/NavLink";
 import {
   ShieldCheck,
   FileText,
