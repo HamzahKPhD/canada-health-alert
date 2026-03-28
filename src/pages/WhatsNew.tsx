@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { AppNavLink } from "@/components/NavLink";
+import { Link } from "react-router-dom";
 import {
   ShieldCheck,
   FileText,
@@ -218,7 +218,7 @@ export default function WhatsNew() {
             Generate SOP-compliant What's New intel screening reports
           </p>
           <div className="mt-3 ml-10">
-            <NavLink to="/" label="← Back to Monitor" />
+            <Link to="/" className="text-sm text-primary hover:text-primary/80 transition-colors font-medium">← Back to Monitor</Link>
           </div>
         </div>
       </header>
