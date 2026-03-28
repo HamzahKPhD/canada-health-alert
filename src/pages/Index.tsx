@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { ReviewDocumentCard } from "@/components/ReviewDocumentCard";
 import { ScanStatus } from "@/components/ScanStatus";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Search, ShieldCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Search, ShieldCheck, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface ReviewDocument {
@@ -125,6 +127,14 @@ export default function Index() {
           <p className="text-muted-foreground text-sm ml-10">
             Tracking review decisions from the Drug and Health Product Portal
           </p>
+          <div className="mt-3 ml-10">
+            <Link to="/whats-new">
+              <Button variant="outline" size="sm" className="gap-2">
+                <FileText className="h-4 w-4" />
+                Generate What's New Report
+              </Button>
+            </Link>
+          </div>
         </div>
       </header>
 
