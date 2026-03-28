@@ -50,19 +50,27 @@ interface MedEffectItem {
 
 // ---- Fetch with retry (sequential, avoids HTTP/2 errors) ----
 async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response | null> {
+  const isCanadaCa = url.includes('canada.ca');
+  
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       if (attempt > 0) {
         await new Promise(r => setTimeout(r, 2000 * attempt));
       }
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': USER_AGENT,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-CA,en;q=0.9',
-          'Connection': 'keep-alive',
-        },
-      });
+      
+      let fetchUrl = url;
+      const headers: Record<string, string> = {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-CA,en;q=0.9',
+      };
+      
+      // canada.ca blocks HTTP/2 from edge functions; use allorigins proxy
+      if (isCanadaCa) {
+        fetchUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+      }
+      
+      const res = await fetch(fetchUrl, { headers });
       if (res.ok) return res;
       console.error(`Fetch ${url} returned ${res.status}`);
     } catch (err) {
