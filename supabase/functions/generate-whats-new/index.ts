@@ -49,14 +49,16 @@ interface MedEffectItem {
 }
 
 // ---- Fetch with retry (sequential, avoids HTTP/2 errors) ----
-async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response | null> {
+async function fetchWithRetry(url: string, maxRetries = 2): Promise<Response | null> {
   const isCanadaCa = url.includes('canada.ca');
+  const proxies = [
+    (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  ];
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      if (attempt > 0) {
-        await new Promise(r => setTimeout(r, 1500 * attempt));
-      }
+      if (attempt > 0) await new Promise(r => setTimeout(r, 2000));
       
       const headers: Record<string, string> = {
         'User-Agent': USER_AGENT,
@@ -65,9 +67,8 @@ async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response | n
       };
       
       let fetchUrl = url;
-      // canada.ca blocks edge function IPs; route through proxy
       if (isCanadaCa) {
-        fetchUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+        fetchUrl = proxies[attempt % proxies.length](url);
       }
       
       const res = await fetch(fetchUrl, { headers });
