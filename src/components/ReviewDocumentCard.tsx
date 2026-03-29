@@ -37,8 +37,8 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-export function ReviewDocumentCard({ doc }: { doc: ReviewDocument }) {
-  const isNewDoc = isNew(doc.first_seen_at);
+export function ReviewDocumentCard({ doc, latestScanAt }: { doc: ReviewDocument; latestScanAt: string | null }) {
+  const isNewDoc = isNew(doc.first_seen_at, latestScanAt);
   const authDate = doc.decision_date || doc.issued_date;
 
   return (
