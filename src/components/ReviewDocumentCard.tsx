@@ -19,11 +19,13 @@ interface ReviewDocument {
   first_seen_at: string;
 }
 
-function isNew(firstSeenAt: string): boolean {
+function isNew(firstSeenAt: string, latestScanAt: string | null): boolean {
+  if (!latestScanAt) return false;
+  // Document is "new" if it was first seen during or after the latest scan
   const seenDate = new Date(firstSeenAt);
-  const now = new Date();
-  const diffHours = (now.getTime() - seenDate.getTime()) / (1000 * 60 * 60);
-  return diffHours < 48;
+  const scanDate = new Date(latestScanAt);
+  // Allow 5 minutes buffer before scan time
+  return seenDate.getTime() >= scanDate.getTime() - 5 * 60 * 1000;
 }
 
 function formatDate(dateStr: string | null): string {
@@ -35,8 +37,8 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-export function ReviewDocumentCard({ doc }: { doc: ReviewDocument }) {
-  const isNewDoc = isNew(doc.first_seen_at);
+export function ReviewDocumentCard({ doc, latestScanAt }: { doc: ReviewDocument; latestScanAt: string | null }) {
+  const isNewDoc = isNew(doc.first_seen_at, latestScanAt);
   const authDate = doc.decision_date || doc.issued_date;
 
   return (

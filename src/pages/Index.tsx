@@ -186,7 +186,7 @@ export default function Index() {
             </div>
           ) : (
             filtered.map((doc) => (
-              <ReviewDocumentCard key={doc.id} doc={doc} />
+              <ReviewDocumentCard key={doc.id} doc={doc} latestScanAt={lastScan?.scanned_at ?? null} />
             ))
           )}
         </div>
