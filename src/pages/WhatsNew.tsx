@@ -215,15 +215,45 @@ export default function WhatsNew() {
     setLoading(true);
     setReport(null);
     try {
-      const { data, error } = await supabase.functions.invoke("generate-whats-new", {
-        body: { dateFrom, dateTo },
+      // Phase 1: DHPP (transparency documents)
+      const { data: p1, error: e1 } = await supabase.functions.invoke("generate-whats-new", {
+        body: { dateFrom, dateTo, phase: 1 },
       });
-      if (error) throw error;
-      if (data.error) throw new Error(data.error);
-      setReport(data as Report);
+      if (e1) throw e1;
+      if (p1?.error) throw new Error(p1.error);
+
+      // Show partial results immediately
+      const partialReport: Report = {
+        date_range: { from: dateFrom, to: dateTo },
+        transparency_documents: p1.transparency_documents || [],
+        guidance_documents: [],
+        medeffect_whats_new: [],
+        safety_reviews: [],
+      };
+      setReport({ ...partialReport });
+
+      // Phase 2: Guidance & Consultations
+      const { data: p2, error: e2 } = await supabase.functions.invoke("generate-whats-new", {
+        body: { dateFrom, dateTo, phase: 2 },
+      });
+      if (!e2 && !p2?.error) {
+        partialReport.guidance_documents = p2.guidance_documents || [];
+        setReport({ ...partialReport });
+      }
+
+      // Phase 3: MedEffect & Safety
+      const { data: p3, error: e3 } = await supabase.functions.invoke("generate-whats-new", {
+        body: { dateFrom, dateTo, phase: 3 },
+      });
+      if (!e3 && !p3?.error) {
+        partialReport.medeffect_whats_new = p3.medeffect_whats_new || [];
+        partialReport.safety_reviews = p3.safety_reviews || [];
+        setReport({ ...partialReport });
+      }
+
       toast({
         title: "Report generated",
-        description: `${data.transparency_documents.length} transparency docs, ${data.guidance_documents.length} guidance items, ${data.medeffect_whats_new.length} MedEffect items.`,
+        description: `${partialReport.transparency_documents.length} transparency docs, ${partialReport.guidance_documents.length} guidance items, ${partialReport.medeffect_whats_new.length} MedEffect items.`,
       });
     } catch (err) {
       console.error("Report error:", err);
