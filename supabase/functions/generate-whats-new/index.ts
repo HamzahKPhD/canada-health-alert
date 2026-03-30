@@ -639,7 +639,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { dateFrom, dateTo } = await req.json();
+    const { dateFrom, dateTo, phase } = await req.json();
     if (!dateFrom || !dateTo) {
       return new Response(
         JSON.stringify({ error: 'dateFrom and dateTo are required (YYYY-MM-DD)' }),
@@ -647,53 +647,82 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Generating What's New report for ${dateFrom} to ${dateTo}`);
-
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    // DHPP can run in parallel with itself since it's a different domain
-    // canada.ca pages must be SEQUENTIAL to avoid HTTP/2 errors
-    
-    // Step 1: Scrape DHPP (different domain, no HTTP/2 issues)
-    const dhppDocs = await scrapeDhpp(dateFrom, dateTo);
-    console.log(`DHPP: ${dhppDocs.length} documents found`);
+    // Phase 1: DHPP scraping + backdating + AI enrichment
+    if (phase === 1 || !phase) {
+      console.log(`Phase 1: DHPP scraping for ${dateFrom} to ${dateTo}`);
+      const dhppDocs = await scrapeDhpp(dateFrom, dateTo);
+      console.log(`DHPP: ${dhppDocs.length} documents found`);
 
-    // Step 2: Scrape canada.ca pages SEQUENTIALLY with delays
+      const backdatedDocs = await detectBackdated(dhppDocs, dateFrom, dateTo, supabase);
+      const allDhppDocs = [...dhppDocs, ...backdatedDocs];
+      console.log(`DHPP: ${dhppDocs.length} (+ ${backdatedDocs.length} backdated)`);
+
+      if (allDhppDocs.length > 0) {
+        await enrichWithIndications(allDhppDocs, supabase);
+      }
+
+      await saveSnapshot(dhppDocs, dateFrom, dateTo, supabase);
+
+      if (phase === 1) {
+        return new Response(
+          JSON.stringify({ phase: 1, transparency_documents: allDhppDocs }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // Phase 2: canada.ca guidance + consultations
+    if (phase === 2) {
+      console.log(`Phase 2: Guidance & Consultations for ${dateFrom} to ${dateTo}`);
+      const guidanceItems = await scrapeAllWhatsNewPages(dateFrom, dateTo);
+      const consultationItems = await scrapeConsultations(dateFrom, dateTo);
+      const allGuidance = [...guidanceItems, ...consultationItems];
+      console.log(`Guidance: ${guidanceItems.length}, Consultations: ${consultationItems.length}`);
+
+      return new Response(
+        JSON.stringify({ phase: 2, guidance_documents: allGuidance }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Phase 3: MedEffect + Safety Reviews
+    if (phase === 3) {
+      console.log(`Phase 3: MedEffect & Safety for ${dateFrom} to ${dateTo}`);
+      const medEffectItems = await scrapeMedEffectWhatsNew(dateFrom, dateTo);
+      const safetyData = await scrapeSafetyReviews(dateFrom, dateTo);
+      console.log(`MedEffect: ${medEffectItems.length}, Safety periods: ${safetyData.periods.length}`);
+
+      return new Response(
+        JSON.stringify({ phase: 3, medeffect_whats_new: medEffectItems, safety_reviews: safetyData.periods }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Legacy: no phase specified, do everything (may timeout for large ranges)
+    console.log(`Generating full report for ${dateFrom} to ${dateTo}`);
+    const dhppDocs = await scrapeDhpp(dateFrom, dateTo);
+    const backdatedDocs = await detectBackdated(dhppDocs, dateFrom, dateTo, supabase);
+    const allDhppDocs = [...dhppDocs, ...backdatedDocs];
+    if (allDhppDocs.length > 0) await enrichWithIndications(allDhppDocs, supabase);
+    await saveSnapshot(dhppDocs, dateFrom, dateTo, supabase);
     const guidanceItems = await scrapeAllWhatsNewPages(dateFrom, dateTo);
     const consultationItems = await scrapeConsultations(dateFrom, dateTo);
     const medEffectItems = await scrapeMedEffectWhatsNew(dateFrom, dateTo);
     const safetyData = await scrapeSafetyReviews(dateFrom, dateTo);
 
-    // Step 3: Detect backdated docs
-    const backdatedDocs = await detectBackdated(dhppDocs, dateFrom, dateTo, supabase);
-    const allDhppDocs = [...dhppDocs, ...backdatedDocs];
-
-    console.log(`DHPP: ${dhppDocs.length} (+ ${backdatedDocs.length} backdated), Guidance: ${guidanceItems.length}, Consultations: ${consultationItems.length}, MedEffect: ${medEffectItems.length}, Safety periods: ${safetyData.periods.length}`);
-
-    // Enrich DHPP docs with indication summaries
-    if (allDhppDocs.length > 0) {
-      await enrichWithIndications(allDhppDocs, supabase);
-    }
-
-    // Save snapshot
-    await saveSnapshot(dhppDocs, dateFrom, dateTo, supabase);
-
-    // Merge consultations into guidance
-    const allGuidance = [...guidanceItems, ...consultationItems];
-
-    const report = {
-      date_range: { from: dateFrom, to: dateTo },
-      transparency_documents: allDhppDocs,
-      guidance_documents: allGuidance,
-      medeffect_whats_new: medEffectItems,
-      safety_reviews: safetyData.periods,
-    };
-
     return new Response(
-      JSON.stringify(report),
+      JSON.stringify({
+        date_range: { from: dateFrom, to: dateTo },
+        transparency_documents: allDhppDocs,
+        guidance_documents: [...guidanceItems, ...consultationItems],
+        medeffect_whats_new: medEffectItems,
+        safety_reviews: safetyData.periods,
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error) {
