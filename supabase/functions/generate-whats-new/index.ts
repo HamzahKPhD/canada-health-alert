@@ -193,31 +193,25 @@ async function scrapeDhpp(dateFrom: string, dateTo: string): Promise<DhppDocumen
 }
 
 // Extended scrape for backdating
-async function scrapeDhppExtended(dateFrom: string): Promise<DhppDocument[]> {
+async function scrapeDhppExtended(dateFrom: string, dateTo: string): Promise<DhppDocument[]> {
   const extendedFrom = new Date(dateFrom + 'T00:00:00');
   extendedFrom.setDate(extendedFrom.getDate() - 28);
   const extFromStr = extendedFrom.toISOString().split('T')[0];
   
+  // Use publication_date filter for the extended 4-week lookback period
+  const filterParam = `f%5B0%5D=publication_date%3A${extFromStr}~${dateTo}`;
   const allDocs: DhppDocument[] = [];
   const maxPages = 20;
 
   for (let page = 0; page < maxPages; page++) {
-    const url = page === 0 ? DHPP_BASE : `${DHPP_BASE}?page=${page}`;
+    const url = page === 0 ? `${DHPP_BASE}?${filterParam}` : `${DHPP_BASE}?${filterParam}&page=${page}`;
+    console.log(`DHPP extended page ${page}: ${url}`);
     const res = await fetchWithRetry(url);
     if (!res) break;
     const html = await res.text();
     const docs = parseDhppPage(html);
     if (docs.length === 0) break;
-
-    let anyInOrAfterRange = false;
-    for (const doc of docs) {
-      const pubDate = getPublicationDate(doc);
-      if (pubDate && pubDate >= extFromStr) {
-        anyInOrAfterRange = true;
-        allDocs.push(doc);
-      }
-    }
-    if (!anyInOrAfterRange) break;
+    allDocs.push(...docs);
   }
   return allDocs;
 }
