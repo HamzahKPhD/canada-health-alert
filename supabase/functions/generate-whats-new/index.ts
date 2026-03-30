@@ -93,11 +93,7 @@ function isInRange(dateStr: string | null, from: string, to: string): boolean {
   return dateStr >= from && dateStr <= to;
 }
 
-function getPublicationDate(doc: DhppDocument): string | null {
-  const dates = [doc.decision_date, doc.issued_date, doc.updated_date].filter(Boolean) as string[];
-  if (dates.length === 0) return null;
-  return dates.sort().reverse()[0];
-}
+// getPublicationDate no longer needed - using DHPP's built-in publication_date filter
 
 function classifyTherapeuticArea(title: string, indication: string | null): string {
   const text = `${title} ${indication || ''}`.toLowerCase();
@@ -161,79 +157,57 @@ function getTotalPages(html: string): number {
 async function scrapeDhpp(dateFrom: string, dateTo: string): Promise<DhppDocument[]> {
   const allDocs: DhppDocument[] = [];
   
-  // First page to get total count
-  console.log(`DHPP page 0: ${DHPP_BASE}`);
-  const firstRes = await fetchWithRetry(DHPP_BASE);
+  // Use the DHPP website's built-in publication_date filter for accurate results
+  const filterParam = `f%5B0%5D=publication_date%3A${dateFrom}~${dateTo}`;
+  const firstUrl = `${DHPP_BASE}?${filterParam}`;
+  console.log(`DHPP filtered page 0: ${firstUrl}`);
+  const firstRes = await fetchWithRetry(firstUrl);
   if (!firstRes) return allDocs;
   const firstHtml = await firstRes.text();
   const firstDocs = parseDhppPage(firstHtml);
   const totalPages = getTotalPages(firstHtml);
-  console.log(`DHPP: ${totalPages} total pages`);
+  console.log(`DHPP filtered: ${totalPages} total pages, ${firstDocs.length} docs on page 1`);
 
-  // Add docs from first page that are in range
-  let foundOlder = false;
-  for (const doc of firstDocs) {
-    const pubDate = getPublicationDate(doc);
-    if (pubDate && isInRange(pubDate, dateFrom, dateTo)) {
-      allDocs.push(doc);
-    }
-    if (pubDate && pubDate < dateFrom) foundOlder = true;
-  }
+  // All docs returned by the filter are in range - add them all
+  allDocs.push(...firstDocs);
 
-  if (foundOlder) return allDocs;
-
-  // Continue pagination
+  // Continue pagination with the same filter
   const maxPages = Math.min(totalPages, 30);
   for (let page = 1; page < maxPages; page++) {
-    const url = `${DHPP_BASE}?page=${page}`;
-    console.log(`DHPP page ${page}: ${url}`);
+    const url = `${DHPP_BASE}?${filterParam}&page=${page}`;
+    console.log(`DHPP filtered page ${page}: ${url}`);
     const res = await fetchWithRetry(url);
     if (!res) break;
     const html = await res.text();
     const docs = parseDhppPage(html);
     if (docs.length === 0) break;
-
-    let anyInOrAfterRange = false;
-    for (const doc of docs) {
-      const pubDate = getPublicationDate(doc);
-      if (pubDate && pubDate >= dateFrom) {
-        anyInOrAfterRange = true;
-        if (isInRange(pubDate, dateFrom, dateTo)) {
-          allDocs.push(doc);
-        }
-      }
-    }
-    if (!anyInOrAfterRange) break;
+    allDocs.push(...docs);
   }
+  
+  console.log(`DHPP: ${allDocs.length} documents found in date range`);
   return allDocs;
 }
 
 // Extended scrape for backdating
-async function scrapeDhppExtended(dateFrom: string): Promise<DhppDocument[]> {
+async function scrapeDhppExtended(dateFrom: string, dateTo: string): Promise<DhppDocument[]> {
   const extendedFrom = new Date(dateFrom + 'T00:00:00');
   extendedFrom.setDate(extendedFrom.getDate() - 28);
   const extFromStr = extendedFrom.toISOString().split('T')[0];
   
+  // Use publication_date filter for the extended 4-week lookback period
+  const filterParam = `f%5B0%5D=publication_date%3A${extFromStr}~${dateTo}`;
   const allDocs: DhppDocument[] = [];
   const maxPages = 20;
 
   for (let page = 0; page < maxPages; page++) {
-    const url = page === 0 ? DHPP_BASE : `${DHPP_BASE}?page=${page}`;
+    const url = page === 0 ? `${DHPP_BASE}?${filterParam}` : `${DHPP_BASE}?${filterParam}&page=${page}`;
+    console.log(`DHPP extended page ${page}: ${url}`);
     const res = await fetchWithRetry(url);
     if (!res) break;
     const html = await res.text();
     const docs = parseDhppPage(html);
     if (docs.length === 0) break;
-
-    let anyInOrAfterRange = false;
-    for (const doc of docs) {
-      const pubDate = getPublicationDate(doc);
-      if (pubDate && pubDate >= extFromStr) {
-        anyInOrAfterRange = true;
-        allDocs.push(doc);
-      }
-    }
-    if (!anyInOrAfterRange) break;
+    allDocs.push(...docs);
   }
   return allDocs;
 }
@@ -268,7 +242,7 @@ async function detectBackdated(
   }
   console.log(`Previous snapshots contain ${previousUrls.size} URLs`);
 
-  const extendedDocs = await scrapeDhppExtended(dateFrom);
+  const extendedDocs = await scrapeDhppExtended(dateFrom, dateTo);
   const backdated: DhppDocument[] = [];
   const currentUrlSet = new Set(currentDocs.map(d => d.url));
 
