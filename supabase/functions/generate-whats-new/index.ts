@@ -246,7 +246,7 @@ async function detectBackdated(
   }
   console.log(`Previous snapshots contain ${previousUrls.size} URLs`);
 
-  const extendedDocs = await scrapeDhppExtended(dateFrom);
+  const extendedDocs = await scrapeDhppExtended(dateFrom, dateTo);
   const backdated: DhppDocument[] = [];
   const currentUrlSet = new Set(currentDocs.map(d => d.url));
 
