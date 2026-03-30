@@ -161,50 +161,34 @@ function getTotalPages(html: string): number {
 async function scrapeDhpp(dateFrom: string, dateTo: string): Promise<DhppDocument[]> {
   const allDocs: DhppDocument[] = [];
   
-  // First page to get total count
-  console.log(`DHPP page 0: ${DHPP_BASE}`);
-  const firstRes = await fetchWithRetry(DHPP_BASE);
+  // Use the DHPP website's built-in publication_date filter for accurate results
+  const filterParam = `f%5B0%5D=publication_date%3A${dateFrom}~${dateTo}`;
+  const firstUrl = `${DHPP_BASE}?${filterParam}`;
+  console.log(`DHPP filtered page 0: ${firstUrl}`);
+  const firstRes = await fetchWithRetry(firstUrl);
   if (!firstRes) return allDocs;
   const firstHtml = await firstRes.text();
   const firstDocs = parseDhppPage(firstHtml);
   const totalPages = getTotalPages(firstHtml);
-  console.log(`DHPP: ${totalPages} total pages`);
+  console.log(`DHPP filtered: ${totalPages} total pages, ${firstDocs.length} docs on page 1`);
 
-  // Add docs from first page that are in range
-  let foundOlder = false;
-  for (const doc of firstDocs) {
-    const pubDate = getPublicationDate(doc);
-    if (pubDate && isInRange(pubDate, dateFrom, dateTo)) {
-      allDocs.push(doc);
-    }
-    if (pubDate && pubDate < dateFrom) foundOlder = true;
-  }
+  // All docs returned by the filter are in range - add them all
+  allDocs.push(...firstDocs);
 
-  if (foundOlder) return allDocs;
-
-  // Continue pagination
+  // Continue pagination with the same filter
   const maxPages = Math.min(totalPages, 30);
   for (let page = 1; page < maxPages; page++) {
-    const url = `${DHPP_BASE}?page=${page}`;
-    console.log(`DHPP page ${page}: ${url}`);
+    const url = `${DHPP_BASE}?${filterParam}&page=${page}`;
+    console.log(`DHPP filtered page ${page}: ${url}`);
     const res = await fetchWithRetry(url);
     if (!res) break;
     const html = await res.text();
     const docs = parseDhppPage(html);
     if (docs.length === 0) break;
-
-    let anyInOrAfterRange = false;
-    for (const doc of docs) {
-      const pubDate = getPublicationDate(doc);
-      if (pubDate && pubDate >= dateFrom) {
-        anyInOrAfterRange = true;
-        if (isInRange(pubDate, dateFrom, dateTo)) {
-          allDocs.push(doc);
-        }
-      }
-    }
-    if (!anyInOrAfterRange) break;
+    allDocs.push(...docs);
   }
+  
+  console.log(`DHPP: ${allDocs.length} documents found in date range`);
   return allDocs;
 }
 
