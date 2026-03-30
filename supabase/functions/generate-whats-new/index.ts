@@ -247,7 +247,7 @@ async function detectBackdated(
   const currentUrlSet = new Set(currentDocs.map(d => d.url));
 
   for (const doc of extendedDocs) {
-    const pubDate = getPublicationDate(doc);
+    const pubDate = doc.issued_date || doc.updated_date || doc.decision_date;
     if (!pubDate) continue;
     if (currentUrlSet.has(doc.url)) continue;
     if (pubDate >= lookbackStr && pubDate < dateFrom) {
