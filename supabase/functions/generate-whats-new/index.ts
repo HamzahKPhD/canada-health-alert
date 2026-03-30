@@ -93,11 +93,7 @@ function isInRange(dateStr: string | null, from: string, to: string): boolean {
   return dateStr >= from && dateStr <= to;
 }
 
-function getPublicationDate(doc: DhppDocument): string | null {
-  const dates = [doc.decision_date, doc.issued_date, doc.updated_date].filter(Boolean) as string[];
-  if (dates.length === 0) return null;
-  return dates.sort().reverse()[0];
-}
+// getPublicationDate no longer needed - using DHPP's built-in publication_date filter
 
 function classifyTherapeuticArea(title: string, indication: string | null): string {
   const text = `${title} ${indication || ''}`.toLowerCase();
