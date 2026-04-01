@@ -767,7 +767,12 @@ Deno.serve(async (req) => {
       console.log(`MedEffect: ${medEffectItems.length}, Safety periods: ${safetyData.periods.length}`);
 
       return new Response(
-        JSON.stringify({ phase: 3, medeffect_whats_new: medEffectItems, safety_reviews: safetyData.periods }),
+        JSON.stringify({
+          phase: 3,
+          medeffect_whats_new: medEffectItems,
+          safety_reviews: safetyData.periods,
+          safety_no_data_statement: safetyData.no_data_statement,
+        }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
