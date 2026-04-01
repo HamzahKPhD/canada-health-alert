@@ -252,6 +252,7 @@ export default function WhatsNew() {
       if (!e3 && !p3?.error) {
         partialReport.medeffect_whats_new = p3.medeffect_whats_new || [];
         partialReport.safety_reviews = p3.safety_reviews || [];
+        partialReport.safety_no_data_statement = p3.safety_no_data_statement || null;
         setReport({ ...partialReport });
       }
 
