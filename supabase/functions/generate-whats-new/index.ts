@@ -500,6 +500,27 @@ async function scrapeConsultations(dateFrom: string, dateTo: string): Promise<Gu
   return items;
 }
 
+// ---- AZ portfolio keywords for relevance check ----
+const AZ_KEYWORDS = [
+  // AZ products and ingredients
+  'astrazeneca', 'farxiga', 'forxiga', 'dapagliflozin', 'brilinta', 'ticagrelor',
+  'symbicort', 'budesonide', 'formoterol', 'tagrisso', 'osimertinib', 'imfinzi',
+  'durvalumab', 'lynparza', 'olaparib', 'calquence', 'acalabrutinib', 'fasenra',
+  'benralizumab', 'saphnelo', 'anifrolumab', 'enhertu', 'trastuzumab deruxtecan',
+  'breztri', 'lokelma', 'sodium zirconium', 'roxadustat', 'tezspire', 'tezepelumab',
+  'beyfortus', 'nirsevimab', 'soliris', 'eculizumab', 'ultomiris', 'ravulizumab',
+  'strensiq', 'asfotase', 'kanuma', 'sebelipase', 'koselugo', 'selumetinib',
+  // Therapeutic area terms
+  'oncology', 'cardiovascular', 'renal', 'respiratory', 'immunology', 'rare disease',
+  'diabetes', 'heart failure', 'chronic kidney', 'asthma', 'copd', 'lung cancer',
+  'breast cancer', 'ovarian cancer', 'lupus', 'covid', 'rsv',
+];
+
+function isAzRelevant(text: string): boolean {
+  const lower = text.toLowerCase();
+  return AZ_KEYWORDS.some(kw => lower.includes(kw));
+}
+
 // ---- MedEffect scraping ----
 async function scrapeMedEffectWhatsNew(dateFrom: string, dateTo: string): Promise<MedEffectItem[]> {
   console.log('Scraping MedEffect What\'s New...');
@@ -519,27 +540,76 @@ async function scrapeMedEffectWhatsNew(dateFrom: string, dateTo: string): Promis
     const date = dateMatch[1];
     if (!isInRange(date, dateFrom, dateTo)) continue;
     const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+    const isInfowatch = /health product infowatch|infowatch/i.test(title);
+    const url = linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`;
+    
     items.push({
       title,
-      url: linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`,
+      url,
       date,
       therapeutic_area: classifyTherapeuticArea(title, null),
+      is_infowatch: isInfowatch,
+      az_relevant_info: null,
     });
   }
-  console.log(`MedEffect What's New: found ${items.length} items`);
+
+  // For InfoWatch items, try to fetch and check for AZ-relevant content
+  for (const item of items) {
+    if (item.is_infowatch) {
+      try {
+        console.log(`Checking InfoWatch for AZ relevance: ${item.url}`);
+        await new Promise(r => setTimeout(r, 1000));
+        const iwRes = await fetchWithRetry(item.url);
+        if (iwRes) {
+          const iwHtml = await iwRes.text();
+          const iwText = iwHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+          if (isAzRelevant(iwText)) {
+            // Use AI to summarize AZ-relevant safety info from InfoWatch
+            const apiKey = Deno.env.get('LOVABLE_API_KEY');
+            if (apiKey) {
+              try {
+                const aiRes = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    model: 'google/gemini-2.5-flash-lite',
+                    messages: [
+                      { role: 'system', content: 'You are a pharmaceutical regulatory expert. Given content from a Health Canada InfoWatch bulletin, identify and summarize any safety information relevant to AstraZeneca products or therapeutic areas (oncology, cardiovascular/renal/metabolism, respiratory, immunology, rare disease, infectious disease/vaccines). If relevant info found, provide a brief summary. If no AZ-relevant info, say "No AZ-relevant safety information identified."' },
+                      { role: 'user', content: iwText.substring(0, 4000) }
+                    ],
+                    max_tokens: 300,
+                    temperature: 0.1,
+                  }),
+                });
+                if (aiRes.ok) {
+                  const aiData = await aiRes.json();
+                  item.az_relevant_info = aiData.choices?.[0]?.message?.content?.trim() || null;
+                }
+              } catch { /* skip AI enrichment on error */ }
+            }
+          } else {
+            item.az_relevant_info = 'No AZ-relevant safety information identified.';
+          }
+        }
+      } catch { /* skip on fetch error */ }
+    }
+  }
+
+  console.log(`MedEffect What's New: found ${items.length} items (${items.filter(i => i.is_infowatch).length} InfoWatch)`);
   return items;
 }
 
-async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ periods: SafetyReviewPeriod[] }> {
+async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ periods: SafetyReviewPeriod[], no_data_statement: string | null }> {
   console.log('Scraping Safety Reviews...');
   await new Promise(r => setTimeout(r, 1500));
   const res = await fetchWithRetry('https://www.canada.ca/en/health-canada/services/drugs-health-products/medeffect-canada/safety-reviews/new.html');
-  if (!res) return { periods: [] };
+  if (!res) return { periods: [], no_data_statement: `No safety and effectiveness reviews list provided by HC for ${dateFrom} to ${dateTo} (as of ${new Date().toISOString().split('T')[0]}).` };
   const html = await res.text();
 
   const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   const periods: SafetyReviewPeriod[] = [];
 
+  // Find all "List of Safety and Effectiveness Reviews Initiated from X to Y"
   const periodRegex = /List of Safety and Effectiveness Reviews Initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
   let periodMatch;
   const periodPositions: { periodFrom: string; periodTo: string }[] = [];
@@ -547,6 +617,7 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
     periodPositions.push({ periodFrom: periodMatch[1], periodTo: periodMatch[2] });
   }
 
+  // Find "No safety and effectiveness reviews initiated from X to Y"
   const noReviewRegex = /No safety and effectiveness reviews initiated from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/g;
   let noMatch;
   const noReviewPeriods: { from: string; to: string }[] = [];
@@ -554,8 +625,13 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
     noReviewPeriods.push({ from: noMatch[1], to: noMatch[2] });
   }
 
+  // Check if the user's date range overlaps with any listed period
+  let foundOverlap = false;
+
   for (const period of periodPositions) {
+    // Check overlap: period overlaps with [dateFrom, dateTo]
     if (period.periodTo < dateFrom || period.periodFrom > dateTo) continue;
+    foundOverlap = true;
 
     const periodLabel = `${period.periodFrom} to ${period.periodTo}`;
     const noReview = noReviewPeriods.find(nr => nr.from === period.periodFrom);
@@ -602,8 +678,27 @@ async function scrapeSafetyReviews(dateFrom: string, dateTo: string): Promise<{ 
     periods.push({ period: periodLabel, reviews, no_reviews_message: null });
   }
 
-  console.log(`Safety Reviews: found ${periods.length} periods`);
-  return { periods };
+  // Also check "no reviews" that aren't part of a "List of..." header
+  for (const nr of noReviewPeriods) {
+    if (nr.to < dateFrom || nr.from > dateTo) continue;
+    const alreadyAdded = periods.some(p => p.period === `${nr.from} to ${nr.to}`);
+    if (!alreadyAdded) {
+      foundOverlap = true;
+      periods.push({
+        period: `${nr.from} to ${nr.to}`,
+        reviews: [],
+        no_reviews_message: `No safety and effectiveness reviews initiated from ${nr.from} to ${nr.to}`,
+      });
+    }
+  }
+
+  // SOP case (b): If the page doesn't mention anything for the requested period at all
+  const noDataStatement = !foundOverlap
+    ? `No safety and effectiveness reviews list provided by HC for ${dateFrom} to ${dateTo} (as of ${new Date().toISOString().split('T')[0]}).`
+    : null;
+
+  console.log(`Safety Reviews: found ${periods.length} periods, noDataStatement: ${noDataStatement ? 'yes' : 'no'}`);
+  return { periods, no_data_statement: noDataStatement };
 }
 
 // ---- Main handler ----
