@@ -72,6 +72,7 @@ interface Report {
   guidance_documents: GuidanceItem[];
   medeffect_whats_new: MedEffectItem[];
   safety_reviews: SafetyReviewPeriod[];
+  safety_no_data_statement: string | null;
 }
 
 const TA_COLORS: Record<string, string> = {
