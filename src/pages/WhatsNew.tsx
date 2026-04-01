@@ -415,7 +415,7 @@ export default function WhatsNew() {
                     {report.medeffect_whats_new.length + report.safety_reviews.reduce((a, p) => a + p.reviews.length, 0)}
                   </Badge>
                 </div>
-                <CopyButton getText={() => formatSafetyText(report.medeffect_whats_new, report.safety_reviews)} />
+                <CopyButton getText={() => formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement)} />
               </div>
               <div className="p-4 space-y-4">
                 {report.medeffect_whats_new.length > 0 && (
