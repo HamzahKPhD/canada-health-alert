@@ -422,13 +422,19 @@ export default function WhatsNew() {
                   <div>
                     <h4 className="text-xs font-semibold text-foreground mb-2">MedEffect What's New</h4>
                     {report.medeffect_whats_new.map((item, i) => (
-                      <div key={i} className="text-sm mb-2 flex items-start gap-2">
+                      <div key={i} className="text-sm mb-3 flex items-start gap-2">
                         <TaBadge ta={item.therapeutic_area} />
+                        {item.is_infowatch && <Badge variant="outline" className="text-xs shrink-0 mt-0.5 border-primary/50 text-primary">InfoWatch</Badge>}
                         <div className="flex-1">
                           <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
                             {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
                           </a>
                           <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                          {item.is_infowatch && item.az_relevant_info && (
+                            <p className="text-xs text-muted-foreground mt-1 bg-muted/50 rounded p-2">
+                              <span className="font-medium text-foreground">AZ Relevance:</span> {item.az_relevant_info}
+                            </p>
+                          )}
                         </div>
                         <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
                       </div>
