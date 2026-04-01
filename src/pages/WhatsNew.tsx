@@ -280,6 +280,33 @@ export default function WhatsNew() {
     }
   }
 
+  async function handleSave() {
+    if (!report) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("saved_reports").insert({
+        date_from: report.date_range.from,
+        date_to: report.date_range.to,
+        report_data: {
+          transparency_documents: report.transparency_documents,
+          guidance_documents: report.guidance_documents,
+          medeffect_whats_new: report.medeffect_whats_new,
+          safety_reviews: report.safety_reviews,
+          safety_no_data_statement: report.safety_no_data_statement,
+        },
+        reviewers,
+        notes: reportNotes || null,
+      } as any);
+      if (error) throw error;
+      toast({ title: "Report saved!", description: "You can view it in the Saved Reports section." });
+    } catch (err) {
+      console.error("Save error:", err);
+      toast({ title: "Save failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const backdatedCount = report?.transparency_documents.filter((d) => d.is_backdated).length || 0;
 
   return (
@@ -291,8 +318,9 @@ export default function WhatsNew() {
             <h1 className="text-2xl font-bold tracking-tight">What's New Report Generator</h1>
           </div>
           <p className="text-muted-foreground text-sm ml-10">Generate SOP-compliant What's New intel screening reports</p>
-          <div className="mt-3 ml-10">
+          <div className="mt-3 ml-10 flex gap-4">
             <Link to="/" className="text-sm text-primary hover:text-primary/80 transition-colors font-medium">← Back to Monitor</Link>
+            <Link to="/saved-reports" className="text-sm text-primary hover:text-primary/80 transition-colors font-medium flex items-center gap-1"><Archive className="h-3.5 w-3.5" />Saved Reports</Link>
           </div>
         </div>
       </header>
