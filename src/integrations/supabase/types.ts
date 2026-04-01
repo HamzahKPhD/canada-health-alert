@@ -92,6 +92,36 @@ export type Database = {
         }
         Relationships: []
       }
+      saved_reports: {
+        Row: {
+          created_at: string
+          date_from: string
+          date_to: string
+          id: string
+          notes: string | null
+          report_data: Json
+          reviewers: Json
+        }
+        Insert: {
+          created_at?: string
+          date_from: string
+          date_to: string
+          id?: string
+          notes?: string | null
+          report_data?: Json
+          reviewers?: Json
+        }
+        Update: {
+          created_at?: string
+          date_from?: string
+          date_to?: string
+          id?: string
+          notes?: string | null
+          report_data?: Json
+          reviewers?: Json
+        }
+        Relationships: []
+      }
       scan_log: {
         Row: {
           id: string
