@@ -432,60 +432,69 @@ async function scrapeAllWhatsNewPages(dateFrom: string, dateTo: string): Promise
   return allItems;
 }
 
-// ---- Consultations scraping ----
+// ---- Consultations scraping (Consulting with Canadians - filtered for Health Canada) ----
 async function scrapeConsultations(dateFrom: string, dateTo: string): Promise<GuidanceItem[]> {
-  console.log('Scraping consultations...');
-  const url = 'https://www.canada.ca/en/health-canada/services/drugs-health-products/public-involvement-consultations/current-past-consultations.html';
+  console.log('Scraping Consulting with Canadians (Health Canada filter)...');
+  const url = 'https://www.canada.ca/en/government/system/consultations/consultingcanadians.html';
   const res = await fetchWithRetry(url);
   if (!res) return [];
   const html = await res.text();
   const items: GuidanceItem[] = [];
 
-  // Parse consultation items looking for date ranges with end dates
-  const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+  // Parse table rows - each <tr> contains: title, status, subjects, date range, start date, end date, organization, description
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let match;
-  while ((match = liRegex.exec(html)) !== null) {
-    const content = match[1];
-    const linkMatch = content.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-    if (!linkMatch) continue;
-
-    const title = linkMatch[2].replace(/<[^>]+>/g, '').trim();
-    const itemUrl = linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`;
-
-    // Look for end date patterns
-    let endDate: string | null = null;
+  while ((match = trRegex.exec(html)) !== null) {
+    const row = match[1];
     
-    // Pattern: "to YYYY-MM-DD" or "ends YYYY-MM-DD" etc
-    const endDatePatterns = [
-      /(?:to|end|ends|closing|deadline|until)\s*(?::|)\s*(\d{4}-\d{2}-\d{2})/i,
-      /(\d{4}-\d{2}-\d{2})\s*$/,
-      /\[(\d{4}-\d{2}-\d{2})\]/,
-    ];
+    // Extract all <td> cells
+    const cells: string[] = [];
+    const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+    let tdMatch;
+    while ((tdMatch = tdRegex.exec(row)) !== null) {
+      cells.push(tdMatch[1]);
+    }
     
-    // Also look for date ranges like "January 15, 2026 to February 28, 2026"
-    const naturalDateRange = content.match(/(?:to|until)\s+(\w+ \d{1,2},?\s*\d{4})/i);
-    if (naturalDateRange) {
-      try {
-        const d = new Date(naturalDateRange[1]);
-        if (!isNaN(d.getTime())) endDate = d.toISOString().split('T')[0];
-      } catch { /* skip */ }
-    }
-
-    if (!endDate) {
-      for (const pat of endDatePatterns) {
-        const m = content.match(pat);
-        if (m) {
-          endDate = parseDate(m[1]);
-          break;
-        }
-      }
-    }
-
-    if (endDate && isInRange(endDate, dateFrom, dateTo)) {
-      items.push({ title, url: itemUrl, date: endDate, source: 'Consultations', therapeutic_area: classifyTherapeuticArea(title, null) });
-    }
+    // Need at least 7 cells: title, status, subjects, date range, start date, end date, organization
+    if (cells.length < 7) continue;
+    
+    // Cell 6 (index 6) = Organization - filter for Health Canada only
+    const org = cells[6].replace(/<[^>]+>/g, '').trim();
+    if (!org.toLowerCase().includes('health canada')) continue;
+    
+    // Cell 5 (index 5) = End date (YYYY-MM-DD, in hidden td)
+    const endDateStr = cells[5].replace(/<[^>]+>/g, '').trim();
+    const endDate = parseDate(endDateStr);
+    if (!endDate) continue;
+    
+    // Check if end date falls within the user's date range
+    if (!isInRange(endDate, dateFrom, dateTo)) continue;
+    
+    // Cell 0 = Title with link
+    const linkMatch = cells[0].match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    const title = linkMatch 
+      ? linkMatch[2].replace(/<[^>]+>/g, '').trim()
+      : cells[0].replace(/<[^>]+>/g, '').trim();
+    const itemUrl = linkMatch 
+      ? (linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.canada.ca${linkMatch[1]}`)
+      : '';
+    
+    // Cell 1 = Status
+    const status = cells[1].replace(/<[^>]+>/g, '').trim();
+    
+    // Cell 3 = Date range (human readable)
+    const dateRange = cells[3].replace(/<[^>]+>/g, '').trim();
+    
+    items.push({
+      title: `${title} (${status}) [${dateRange}]`,
+      url: itemUrl,
+      date: endDate,
+      source: 'Consultations',
+      therapeutic_area: classifyTherapeuticArea(title, null),
+    });
   }
-  console.log(`Consultations: found ${items.length} items`);
+  
+  console.log(`Consultations: found ${items.length} Health Canada items`);
   return items;
 }
 
