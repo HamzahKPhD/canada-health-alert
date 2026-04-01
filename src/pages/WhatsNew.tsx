@@ -232,6 +232,7 @@ export default function WhatsNew() {
         guidance_documents: [],
         medeffect_whats_new: [],
         safety_reviews: [],
+        safety_no_data_statement: null,
       };
       setReport({ ...partialReport });
 
