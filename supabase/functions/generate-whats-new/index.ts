@@ -796,6 +796,7 @@ Deno.serve(async (req) => {
         guidance_documents: [...guidanceItems, ...consultationItems],
         medeffect_whats_new: medEffectItems,
         safety_reviews: safetyData.periods,
+        safety_no_data_statement: safetyData.no_data_statement,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
