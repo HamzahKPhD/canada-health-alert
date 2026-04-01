@@ -214,6 +214,8 @@ export default function WhatsNew() {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
   const [reviewers, setReviewers] = useState<Record<string, string>>({});
+  const [reportNotes, setReportNotes] = useState("");
+  const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
   const setReviewer = (url: string, name: string) => {
