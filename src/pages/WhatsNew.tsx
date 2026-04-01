@@ -152,11 +152,15 @@ function formatGuidanceText(items: GuidanceItem[]): string {
   return items.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}\n(Source: ${i.source})`).join("\n\n");
 }
 
-function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[]): string {
+function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[], noDataStatement: string | null): string {
   const parts: string[] = [];
   if (medeffect.length > 0) {
     parts.push("MedEffect What's New:");
-    parts.push(...medeffect.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}`));
+    parts.push(...medeffect.map((i) => {
+      let line = `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}`;
+      if (i.is_infowatch && i.az_relevant_info) line += `\nAZ Relevance: ${i.az_relevant_info}`;
+      return line;
+    }));
   }
   if (periods.length > 0) {
     parts.push("\nSafety and Effectiveness Reviews:");
@@ -170,6 +174,9 @@ function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPerio
         }
       }
     }
+  }
+  if (noDataStatement) {
+    parts.push(`\n${noDataStatement}`);
   }
   if (parts.length === 0) return "No safety reviews found for this period.";
   return parts.join("\n");
