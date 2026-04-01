@@ -16,7 +16,10 @@ import {
   AlertTriangle,
   BookOpen,
   Clock,
+  Save,
+  Archive,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 
 // ---- Types ----
 interface DhppDocument {
