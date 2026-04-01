@@ -62,6 +62,8 @@ interface MedEffectItem {
   url: string;
   date: string;
   therapeutic_area: string | null;
+  is_infowatch: boolean;
+  az_relevant_info: string | null;
 }
 
 interface Report {
@@ -70,6 +72,7 @@ interface Report {
   guidance_documents: GuidanceItem[];
   medeffect_whats_new: MedEffectItem[];
   safety_reviews: SafetyReviewPeriod[];
+  safety_no_data_statement: string | null;
 }
 
 const TA_COLORS: Record<string, string> = {
@@ -149,11 +152,15 @@ function formatGuidanceText(items: GuidanceItem[]): string {
   return items.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}\n(Source: ${i.source})`).join("\n\n");
 }
 
-function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[]): string {
+function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[], noDataStatement: string | null): string {
   const parts: string[] = [];
   if (medeffect.length > 0) {
     parts.push("MedEffect What's New:");
-    parts.push(...medeffect.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}`));
+    parts.push(...medeffect.map((i) => {
+      let line = `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}`;
+      if (i.is_infowatch && i.az_relevant_info) line += `\nAZ Relevance: ${i.az_relevant_info}`;
+      return line;
+    }));
   }
   if (periods.length > 0) {
     parts.push("\nSafety and Effectiveness Reviews:");
@@ -167,6 +174,9 @@ function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPerio
         }
       }
     }
+  }
+  if (noDataStatement) {
+    parts.push(`\n${noDataStatement}`);
   }
   if (parts.length === 0) return "No safety reviews found for this period.";
   return parts.join("\n");
@@ -189,7 +199,7 @@ function formatFullReport(report: Report, reviewers: Record<string, string>): st
     formatGuidanceText(report.guidance_documents),
     `\n${sep}`,
     "\nc. MedEffect Safety Reviews:\n",
-    formatSafetyText(report.medeffect_whats_new, report.safety_reviews),
+    formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement),
     reviewerText,
   ].join("\n");
 }
@@ -229,6 +239,7 @@ export default function WhatsNew() {
         guidance_documents: [],
         medeffect_whats_new: [],
         safety_reviews: [],
+        safety_no_data_statement: null,
       };
       setReport({ ...partialReport });
 
@@ -248,6 +259,7 @@ export default function WhatsNew() {
       if (!e3 && !p3?.error) {
         partialReport.medeffect_whats_new = p3.medeffect_whats_new || [];
         partialReport.safety_reviews = p3.safety_reviews || [];
+        partialReport.safety_no_data_statement = p3.safety_no_data_statement || null;
         setReport({ ...partialReport });
       }
 
@@ -403,20 +415,26 @@ export default function WhatsNew() {
                     {report.medeffect_whats_new.length + report.safety_reviews.reduce((a, p) => a + p.reviews.length, 0)}
                   </Badge>
                 </div>
-                <CopyButton getText={() => formatSafetyText(report.medeffect_whats_new, report.safety_reviews)} />
+                <CopyButton getText={() => formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement)} />
               </div>
               <div className="p-4 space-y-4">
                 {report.medeffect_whats_new.length > 0 && (
                   <div>
                     <h4 className="text-xs font-semibold text-foreground mb-2">MedEffect What's New</h4>
                     {report.medeffect_whats_new.map((item, i) => (
-                      <div key={i} className="text-sm mb-2 flex items-start gap-2">
+                      <div key={i} className="text-sm mb-3 flex items-start gap-2">
                         <TaBadge ta={item.therapeutic_area} />
+                        {item.is_infowatch && <Badge variant="outline" className="text-xs shrink-0 mt-0.5 border-primary/50 text-primary">InfoWatch</Badge>}
                         <div className="flex-1">
                           <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
                             {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
                           </a>
                           <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                          {item.is_infowatch && item.az_relevant_info && (
+                            <p className="text-xs text-muted-foreground mt-1 bg-muted/50 rounded p-2">
+                              <span className="font-medium text-foreground">AZ Relevance:</span> {item.az_relevant_info}
+                            </p>
+                          )}
                         </div>
                         <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
                       </div>
@@ -465,7 +483,13 @@ export default function WhatsNew() {
                   </div>
                 )}
 
-                {report.medeffect_whats_new.length === 0 && report.safety_reviews.length === 0 && (
+                {report.safety_no_data_statement && (
+                  <div className="bg-muted/50 rounded p-3">
+                    <p className="text-sm text-muted-foreground italic">{report.safety_no_data_statement}</p>
+                  </div>
+                )}
+
+                {report.medeffect_whats_new.length === 0 && report.safety_reviews.length === 0 && !report.safety_no_data_statement && (
                   <p className="text-sm text-muted-foreground">No safety reviews found.</p>
                 )}
               </div>
