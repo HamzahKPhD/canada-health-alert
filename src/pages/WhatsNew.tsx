@@ -62,6 +62,8 @@ interface MedEffectItem {
   url: string;
   date: string;
   therapeutic_area: string | null;
+  is_infowatch: boolean;
+  az_relevant_info: string | null;
 }
 
 interface Report {
