@@ -483,7 +483,13 @@ export default function WhatsNew() {
                   </div>
                 )}
 
-                {report.medeffect_whats_new.length === 0 && report.safety_reviews.length === 0 && (
+                {report.safety_no_data_statement && (
+                  <div className="bg-muted/50 rounded p-3">
+                    <p className="text-sm text-muted-foreground italic">{report.safety_no_data_statement}</p>
+                  </div>
+                )}
+
+                {report.medeffect_whats_new.length === 0 && report.safety_reviews.length === 0 && !report.safety_no_data_statement && (
                   <p className="text-sm text-muted-foreground">No safety reviews found.</p>
                 )}
               </div>
