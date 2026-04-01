@@ -199,7 +199,7 @@ function formatFullReport(report: Report, reviewers: Record<string, string>): st
     formatGuidanceText(report.guidance_documents),
     `\n${sep}`,
     "\nc. MedEffect Safety Reviews:\n",
-    formatSafetyText(report.medeffect_whats_new, report.safety_reviews),
+    formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement),
     reviewerText,
   ].join("\n");
 }
