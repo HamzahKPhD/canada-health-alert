@@ -527,6 +527,32 @@ export default function WhatsNew() {
                 )}
               </div>
             </Card>
+
+            {/* Save Report */}
+            <Card className="p-5 space-y-3">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <Save className="h-4 w-4 text-primary" />
+                Save Report for Audit Trail
+              </h3>
+              <Textarea
+                placeholder="Add any notes for this report (optional)..."
+                value={reportNotes}
+                onChange={(e) => setReportNotes(e.target.value)}
+                className="text-sm"
+                rows={2}
+              />
+              <div className="flex items-center gap-3">
+                <Button onClick={handleSave} disabled={saving} className="gap-2">
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {saving ? "Saving..." : "Save Report"}
+                </Button>
+                <Link to="/saved-reports">
+                  <Button variant="outline" size="sm" className="gap-1.5">
+                    <Archive className="h-3.5 w-3.5" />View Saved Reports
+                  </Button>
+                </Link>
+              </div>
+            </Card>
           </div>
         )}
       </main>
