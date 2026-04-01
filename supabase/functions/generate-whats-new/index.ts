@@ -375,21 +375,10 @@ async function enrichWithIndications(docs: DhppDocument[], supabase: ReturnType<
 function parseWhatsNewPage(html: string, dateFrom: string, dateTo: string, source: string): GuidanceItem[] {
   const items: GuidanceItem[] = [];
   
+  // Only skip items already covered by the DHPP/RDS/SBD section or truly irrelevant
   const skipPatterns = [
-    'Multiple additions to the Prescription Drug List',
-    'Updated List of Drugs for an Urgent Public Health Need',
-    'Updated Register of Certificates of Supplementary Protection',
-    'Medical Devices',
-    'Register for Innovative Drugs',
-    'Register of Innovative Drugs',
-    'NOC Data Extract',
-    'Notice of Compliance (NOC) Data Extract',
-    'DPD Extract',
-    'Drug Product Database data extract',
-    'Product Monograph Brand Safety Updates',
     'Summary Basis of Decision',
-    'Monthly update to the submissions under review',
-    'Monthly update to the generic submissions',
+    'Regulatory Decision Summary',
   ];
 
   // Extract all <li> items with links and dates
