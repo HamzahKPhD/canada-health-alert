@@ -350,7 +350,7 @@ export default function WhatsNew() {
               {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>) : (<><FileText className="h-4 w-4 mr-2" />Generate Report</>)}
             </Button>
           </div>
-          {loading && <p className="text-sm text-muted-foreground mt-3 animate-pulse">{report ? "Fetching additional sections..." : "Scraping Health Canada websites (Phase 1 of 3)..."}</p>}
+          {loading && <p className="text-sm text-muted-foreground mt-3 animate-pulse">{progressMsg || "Starting..."}</p>}
         </Card>
 
         {/* Report */}
