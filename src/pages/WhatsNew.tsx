@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { scrapeGuidanceDocuments, scrapeConsultations, scrapeMedEffect } from "@/lib/client-scraper";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -222,6 +223,8 @@ export default function WhatsNew() {
     setReviewers((prev) => ({ ...prev, [url]: name }));
   };
 
+  const [progressMsg, setProgressMsg] = useState("");
+
   async function handleGenerate() {
     if (!dateFrom || !dateTo) {
       toast({ title: "Please enter both dates", variant: "destructive" });
@@ -229,15 +232,15 @@ export default function WhatsNew() {
     }
     setLoading(true);
     setReport(null);
+    setProgressMsg("Phase 1: Scraping transparency documents...");
     try {
-      // Phase 1: DHPP (transparency documents)
+      // Phase 1: DHPP (transparency documents) - via edge function (dhpp.hpfb-dgpsa.ca is not blocked)
       const { data: p1, error: e1 } = await supabase.functions.invoke("generate-whats-new", {
         body: { dateFrom, dateTo, phase: 1 },
       });
       if (e1) throw e1;
       if (p1?.error) throw new Error(p1.error);
 
-      // Show partial results immediately
       const partialReport: Report = {
         date_range: { from: dateFrom, to: dateTo },
         transparency_documents: p1.transparency_documents || [],
@@ -248,24 +251,29 @@ export default function WhatsNew() {
       };
       setReport({ ...partialReport });
 
-      // Phase 2: Guidance & Consultations
-      const { data: p2, error: e2 } = await supabase.functions.invoke("generate-whats-new", {
-        body: { dateFrom, dateTo, phase: 2 },
-      });
-      if (!e2 && !p2?.error) {
-        partialReport.guidance_documents = p2.guidance_documents || [];
+      // Phase 2: Guidance & Consultations - CLIENT-SIDE (canada.ca blocks cloud servers)
+      setProgressMsg("Phase 2: Scraping guidance documents & consultations (browser-side)...");
+      try {
+        const [guidanceItems, consultationItems] = await Promise.all([
+          scrapeGuidanceDocuments(dateFrom, dateTo, setProgressMsg),
+          scrapeConsultations(dateFrom, dateTo, setProgressMsg),
+        ]);
+        partialReport.guidance_documents = [...guidanceItems, ...consultationItems];
         setReport({ ...partialReport });
+      } catch (err) {
+        console.error("Phase 2 error:", err);
       }
 
-      // Phase 3: MedEffect & Safety
-      const { data: p3, error: e3 } = await supabase.functions.invoke("generate-whats-new", {
-        body: { dateFrom, dateTo, phase: 3 },
-      });
-      if (!e3 && !p3?.error) {
-        partialReport.medeffect_whats_new = p3.medeffect_whats_new || [];
-        partialReport.safety_reviews = p3.safety_reviews || [];
-        partialReport.safety_no_data_statement = p3.safety_no_data_statement || null;
+      // Phase 3: MedEffect & Safety - CLIENT-SIDE
+      setProgressMsg("Phase 3: Scraping MedEffect & safety reviews (browser-side)...");
+      try {
+        const medData = await scrapeMedEffect(dateFrom, dateTo, setProgressMsg);
+        partialReport.medeffect_whats_new = medData.items;
+        partialReport.safety_reviews = medData.periods;
+        partialReport.safety_no_data_statement = medData.noDataStatement;
         setReport({ ...partialReport });
+      } catch (err) {
+        console.error("Phase 3 error:", err);
       }
 
       toast({
@@ -277,6 +285,7 @@ export default function WhatsNew() {
       toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
     } finally {
       setLoading(false);
+      setProgressMsg("");
     }
   }
 
@@ -341,7 +350,7 @@ export default function WhatsNew() {
               {loading ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>) : (<><FileText className="h-4 w-4 mr-2" />Generate Report</>)}
             </Button>
           </div>
-          {loading && <p className="text-sm text-muted-foreground mt-3 animate-pulse">{report ? "Fetching additional sections..." : "Scraping Health Canada websites (Phase 1 of 3)..."}</p>}
+          {loading && <p className="text-sm text-muted-foreground mt-3 animate-pulse">{progressMsg || "Starting..."}</p>}
         </Card>
 
         {/* Report */}
