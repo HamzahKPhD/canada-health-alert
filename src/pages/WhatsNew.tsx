@@ -350,7 +350,7 @@ export default function WhatsNew() {
           medeffect_whats_new: report.medeffect_whats_new,
           safety_reviews: report.safety_reviews,
           safety_no_data_statement: report.safety_no_data_statement,
-          summary,
+          entry_summaries: entrySummaries,
         },
         reviewers,
         notes: reportNotes || null,
