@@ -389,6 +389,27 @@ export default function WhatsNew() {
               {Object.keys(TA_COLORS).map((ta) => (<TaBadge key={ta} ta={ta} />))}
             </div>
 
+            {/* Regulatory Affairs Summary */}
+            {(summary || summaryLoading) && (
+              <Card className="overflow-hidden border-primary/30">
+                <div className="flex items-center justify-between p-4 bg-primary/5 border-b border-border/60">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <h3 className="font-semibold text-sm">Regulatory Affairs Summary</h3>
+                    {summaryLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                  </div>
+                  {summary && <CopyButton getText={() => summary} />}
+                </div>
+                <div className="p-4">
+                  {summaryLoading && !summary ? (
+                    <p className="text-sm text-muted-foreground animate-pulse">Analyzing findings for regulatory affairs impact...</p>
+                  ) : (
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{summary}</p>
+                  )}
+                </div>
+              </Card>
+            )}
+
             {/* Section A: Transparency Documents */}
             <Card className="overflow-hidden">
               <div className="flex items-center justify-between p-4 bg-muted/50 border-b border-border/60">
