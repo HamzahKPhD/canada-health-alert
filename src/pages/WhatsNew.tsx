@@ -131,8 +131,28 @@ function ReviewerInput({ value, onChange }: { value: string; onChange: (v: strin
   );
 }
 
+function EntrySummary({ url, summaries, loading }: { url: string; summaries: Record<string, string>; loading: Set<string> }) {
+  const s = summaries[url];
+  const isLoading = loading.has(url);
+  if (!s && !isLoading) return null;
+  return (
+    <div className="mt-2 ml-12 text-xs bg-primary/5 border border-primary/20 rounded p-2">
+      <div className="flex items-center gap-1.5 mb-1">
+        <FileText className="h-3 w-3 text-primary" />
+        <span className="font-medium text-foreground">Reg Affairs Summary</span>
+        {isLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+      </div>
+      {s ? (
+        <p className="text-muted-foreground leading-relaxed">{s}</p>
+      ) : (
+        <p className="text-muted-foreground italic animate-pulse">Generating…</p>
+      )}
+    </div>
+  );
+}
+
 // ---- Text formatters ----
-function formatTransparencyText(docs: DhppDocument[]): string {
+function formatTransparencyText(docs: DhppDocument[], summaries: Record<string, string> = {}): string {
   if (docs.length === 0) return "No transparency documents found for this period.";
   return docs.map((doc) => {
     const lines = [`${doc.is_backdated ? "[BACKDATED] " : ""}${doc.title}`, doc.url];
@@ -147,22 +167,28 @@ function formatTransparencyText(docs: DhppDocument[]): string {
     if (doc.issued_date) lines.push(`Issued Date: ${doc.issued_date}`);
     if (doc.indication_summary && doc.indication_summary !== "Not available for this document type")
       lines.push(`Indication: ${doc.indication_summary}`);
+    if (summaries[doc.url]) lines.push(`Reg Affairs Summary: ${summaries[doc.url]}`);
     return lines.join("\n");
   }).join("\n\n");
 }
 
-function formatGuidanceText(items: GuidanceItem[]): string {
+function formatGuidanceText(items: GuidanceItem[], summaries: Record<string, string> = {}): string {
   if (items.length === 0) return "No guidance documents found for this period.";
-  return items.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}\n(Source: ${i.source})`).join("\n\n");
+  return items.map((i) => {
+    let s = `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}\n(Source: ${i.source})`;
+    if (summaries[i.url]) s += `\nReg Affairs Summary: ${summaries[i.url]}`;
+    return s;
+  }).join("\n\n");
 }
 
-function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[], noDataStatement: string | null): string {
+function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[], noDataStatement: string | null, summaries: Record<string, string> = {}): string {
   const parts: string[] = [];
   if (medeffect.length > 0) {
     parts.push("MedEffect What's New:");
     parts.push(...medeffect.map((i) => {
       let line = `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}`;
       if (i.is_infowatch && i.az_relevant_info) line += `\nAZ Relevance: ${i.az_relevant_info}`;
+      if (summaries[i.url]) line += `\nReg Affairs Summary: ${summaries[i.url]}`;
       return line;
     }));
   }
@@ -186,26 +212,23 @@ function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPerio
   return parts.join("\n");
 }
 
-function formatFullReport(report: Report, reviewers: Record<string, string>, summary: string): string {
+function formatFullReport(report: Report, reviewers: Record<string, string>, summaries: Record<string, string>): string {
   const header = `Health Canada What's New — ${formatDate(report.date_range.from)} to ${formatDate(report.date_range.to)}`;
   const sep = "=".repeat(60);
 
   const reviewerSection = Object.entries(reviewers).filter(([, v]) => v).map(([url, name]) => `${url}: ${name}`);
   const reviewerText = reviewerSection.length > 0 ? `\n\nReviewer Assignments:\n${reviewerSection.join("\n")}` : "";
 
-  const summarySection = summary ? `\nRegulatory Affairs Summary:\n${summary}\n${sep}\n` : "";
-
   return [
     header, sep,
-    summarySection,
     "\na. Transparency Documents (RDS / SBD / SSR):\n",
-    formatTransparencyText(report.transparency_documents),
+    formatTransparencyText(report.transparency_documents, summaries),
     `\n${sep}`,
     "\nb. Guidance Documents, Notices, ICH, Consultations:\n",
-    formatGuidanceText(report.guidance_documents),
+    formatGuidanceText(report.guidance_documents, summaries),
     `\n${sep}`,
     "\nc. MedEffect Safety Reviews:\n",
-    formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement),
+    formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement, summaries),
     reviewerText,
   ].join("\n");
 }
@@ -219,8 +242,8 @@ export default function WhatsNew() {
   const [reviewers, setReviewers] = useState<Record<string, string>>({});
   const [reportNotes, setReportNotes] = useState("");
   const [saving, setSaving] = useState(false);
-  const [summary, setSummary] = useState("");
-  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [entrySummaries, setEntrySummaries] = useState<Record<string, string>>({});
+  const [summarizingUrls, setSummarizingUrls] = useState<Set<string>>(new Set());
   const { toast } = useToast();
 
   const setReviewer = (url: string, name: string) => {
@@ -236,7 +259,7 @@ export default function WhatsNew() {
     }
     setLoading(true);
     setReport(null);
-    setSummary("");
+    setEntrySummaries({});
     setProgressMsg("Phase 1: Scraping transparency documents...");
     try {
       // Phase 1: DHPP (transparency documents) - via edge function (dhpp.hpfb-dgpsa.ca is not blocked)
@@ -286,23 +309,45 @@ export default function WhatsNew() {
         description: `${partialReport.transparency_documents.length} transparency docs, ${partialReport.guidance_documents.length} guidance items, ${partialReport.medeffect_whats_new.length} MedEffect items.`,
       });
 
-      // Phase 4: AI-generated regulatory affairs summary
-      setSummaryLoading(true);
-      setProgressMsg("Phase 4: Generating regulatory affairs summary...");
-      try {
-        const reportText = formatFullReport(partialReport, {}, "");
-        const { data: sumData, error: sumErr } = await supabase.functions.invoke("summarize-report", {
-          body: { reportText, dateFrom, dateTo },
-        });
-        if (sumErr) throw sumErr;
-        if (sumData?.error) throw new Error(sumData.error);
-        setSummary(sumData?.summary || "");
-      } catch (err) {
-        console.error("Summary error:", err);
-        toast({ title: "Summary failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
-      } finally {
-        setSummaryLoading(false);
-      }
+      // Phase 4: Per-entry AI regulatory affairs summaries (parallel, batched)
+      setProgressMsg("Phase 4: Generating per-entry regulatory affairs summaries...");
+      const allEntries: { url: string; title: string; type: string; metadata: any }[] = [
+        ...partialReport.transparency_documents.map((d) => ({
+          url: d.url, title: d.title, type: d.type,
+          metadata: { product_type: d.product_type, control_number: d.control_number, din: d.din, manufacturer: d.manufacturer, submission_type: d.submission_type, decision_date: d.decision_date, issued_date: d.issued_date, indication_summary: d.indication_summary, therapeutic_area: d.therapeutic_area },
+        })),
+        ...partialReport.guidance_documents.map((g) => ({
+          url: g.url, title: g.title, type: `Guidance/${g.source}`,
+          metadata: { date: g.date, therapeutic_area: g.therapeutic_area, source: g.source },
+        })),
+        ...partialReport.medeffect_whats_new.map((m) => ({
+          url: m.url, title: m.title, type: m.is_infowatch ? "MedEffect/InfoWatch" : "MedEffect",
+          metadata: { date: m.date, therapeutic_area: m.therapeutic_area, az_relevant_info: m.az_relevant_info },
+        })),
+      ];
+
+      const CONCURRENCY = 4;
+      let idx = 0;
+      const worker = async () => {
+        while (idx < allEntries.length) {
+          const i = idx++;
+          const entry = allEntries[i];
+          setSummarizingUrls((prev) => new Set(prev).add(entry.url));
+          try {
+            const { data, error } = await supabase.functions.invoke("summarize-entry", { body: entry });
+            if (error) throw error;
+            if (data?.error) throw new Error(data.error);
+            if (data?.summary) {
+              setEntrySummaries((prev) => ({ ...prev, [entry.url]: data.summary }));
+            }
+          } catch (err) {
+            console.error("Entry summary failed", entry.url, err);
+          } finally {
+            setSummarizingUrls((prev) => { const n = new Set(prev); n.delete(entry.url); return n; });
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, allEntries.length) }, worker));
     } catch (err) {
       console.error("Report error:", err);
       toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
@@ -325,7 +370,7 @@ export default function WhatsNew() {
           medeffect_whats_new: report.medeffect_whats_new,
           safety_reviews: report.safety_reviews,
           safety_no_data_statement: report.safety_no_data_statement,
-          summary,
+          entry_summaries: entrySummaries,
         },
         reviewers,
         notes: reportNotes || null,
@@ -382,34 +427,13 @@ export default function WhatsNew() {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-lg font-semibold">Report: {formatDate(report.date_range.from)} — {formatDate(report.date_range.to)}</h2>
-              <CopyButton getText={() => formatFullReport(report, reviewers, summary)} />
+              <CopyButton getText={() => formatFullReport(report, reviewers, entrySummaries)} />
             </div>
 
             {/* TA Legend */}
             <div className="flex flex-wrap gap-2 text-xs">
               {Object.keys(TA_COLORS).map((ta) => (<TaBadge key={ta} ta={ta} />))}
             </div>
-
-            {/* Regulatory Affairs Summary */}
-            {(summary || summaryLoading) && (
-              <Card className="overflow-hidden border-primary/30">
-                <div className="flex items-center justify-between p-4 bg-primary/5 border-b border-border/60">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-primary" />
-                    <h3 className="font-semibold text-sm">Regulatory Affairs Summary</h3>
-                    {summaryLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-                  </div>
-                  {summary && <CopyButton getText={() => summary} />}
-                </div>
-                <div className="p-4">
-                  {summaryLoading && !summary ? (
-                    <p className="text-sm text-muted-foreground animate-pulse">Analyzing findings for regulatory affairs impact...</p>
-                  ) : (
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{summary}</p>
-                  )}
-                </div>
-              </Card>
-            )}
 
             {/* Section A: Transparency Documents */}
             <Card className="overflow-hidden">
@@ -422,7 +446,7 @@ export default function WhatsNew() {
                     <Badge variant="destructive" className="text-xs gap-1"><Clock className="h-3 w-3" />{backdatedCount} backdated</Badge>
                   )}
                 </div>
-                <CopyButton getText={() => formatTransparencyText(report.transparency_documents)} />
+                <CopyButton getText={() => formatTransparencyText(report.transparency_documents, entrySummaries)} />
               </div>
               <div className="p-4 space-y-4">
                 {report.transparency_documents.length === 0 ? (
@@ -455,6 +479,7 @@ export default function WhatsNew() {
                           <span className="text-muted-foreground">{doc.indication_summary}</span>
                         </div>
                       )}
+                      <EntrySummary url={doc.url} summaries={entrySummaries} loading={summarizingUrls} />
                     </div>
                   ))
                 )}
@@ -469,23 +494,26 @@ export default function WhatsNew() {
                   <h3 className="font-semibold text-sm">b. Guidance, Notices, ICH, Consultations</h3>
                   <Badge variant="secondary" className="text-xs">{report.guidance_documents.length}</Badge>
                 </div>
-                <CopyButton getText={() => formatGuidanceText(report.guidance_documents)} />
+                <CopyButton getText={() => formatGuidanceText(report.guidance_documents, entrySummaries)} />
               </div>
               <div className="p-4 space-y-3">
                 {report.guidance_documents.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No guidance documents found.</p>
                 ) : (
                   report.guidance_documents.map((item, i) => (
-                    <div key={i} className="flex items-start gap-3 text-sm">
-                      <Badge variant="outline" className="text-xs shrink-0 mt-0.5">{item.source}</Badge>
-                      <TaBadge ta={item.therapeutic_area} />
-                      <div className="flex-1">
-                        <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
-                          {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
-                        </a>
-                        <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                    <div key={i} className="text-sm">
+                      <div className="flex items-start gap-3">
+                        <Badge variant="outline" className="text-xs shrink-0 mt-0.5">{item.source}</Badge>
+                        <TaBadge ta={item.therapeutic_area} />
+                        <div className="flex-1">
+                          <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
+                            {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
+                          </a>
+                          <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                        </div>
+                        <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
                       </div>
-                      <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
+                      <EntrySummary url={item.url} summaries={entrySummaries} loading={summarizingUrls} />
                     </div>
                   ))
                 )}
@@ -502,28 +530,31 @@ export default function WhatsNew() {
                     {report.medeffect_whats_new.length + report.safety_reviews.reduce((a, p) => a + p.reviews.length, 0)}
                   </Badge>
                 </div>
-                <CopyButton getText={() => formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement)} />
+                <CopyButton getText={() => formatSafetyText(report.medeffect_whats_new, report.safety_reviews, report.safety_no_data_statement, entrySummaries)} />
               </div>
               <div className="p-4 space-y-4">
                 {report.medeffect_whats_new.length > 0 && (
                   <div>
                     <h4 className="text-xs font-semibold text-foreground mb-2">MedEffect What's New</h4>
                     {report.medeffect_whats_new.map((item, i) => (
-                      <div key={i} className="text-sm mb-3 flex items-start gap-2">
-                        <TaBadge ta={item.therapeutic_area} />
-                        {item.is_infowatch && <Badge variant="outline" className="text-xs shrink-0 mt-0.5 border-primary/50 text-primary">InfoWatch</Badge>}
-                        <div className="flex-1">
-                          <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
-                            {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
-                          </a>
-                          <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
-                          {item.is_infowatch && item.az_relevant_info && (
-                            <p className="text-xs text-muted-foreground mt-1 bg-muted/50 rounded p-2">
-                              <span className="font-medium text-foreground">AZ Relevance:</span> {item.az_relevant_info}
-                            </p>
-                          )}
+                      <div key={i} className="text-sm mb-3">
+                        <div className="flex items-start gap-2">
+                          <TaBadge ta={item.therapeutic_area} />
+                          {item.is_infowatch && <Badge variant="outline" className="text-xs shrink-0 mt-0.5 border-primary/50 text-primary">InfoWatch</Badge>}
+                          <div className="flex-1">
+                            <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
+                              {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
+                            </a>
+                            <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                            {item.is_infowatch && item.az_relevant_info && (
+                              <p className="text-xs text-muted-foreground mt-1 bg-muted/50 rounded p-2">
+                                <span className="font-medium text-foreground">AZ Relevance:</span> {item.az_relevant_info}
+                              </p>
+                            )}
+                          </div>
+                          <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
                         </div>
-                        <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
+                        <EntrySummary url={item.url} summaries={entrySummaries} loading={summarizingUrls} />
                       </div>
                     ))}
                   </div>
