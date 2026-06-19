@@ -222,8 +222,8 @@ export default function WhatsNew() {
   const [reviewers, setReviewers] = useState<Record<string, string>>({});
   const [reportNotes, setReportNotes] = useState("");
   const [saving, setSaving] = useState(false);
-  const [summary, setSummary] = useState("");
-  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [entrySummaries, setEntrySummaries] = useState<Record<string, string>>({});
+  const [summarizingUrls, setSummarizingUrls] = useState<Set<string>>(new Set());
   const { toast } = useToast();
 
   const setReviewer = (url: string, name: string) => {
