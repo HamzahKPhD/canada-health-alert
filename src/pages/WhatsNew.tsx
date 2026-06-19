@@ -186,16 +186,18 @@ function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPerio
   return parts.join("\n");
 }
 
-function formatFullReport(report: Report, reviewers: Record<string, string>): string {
+function formatFullReport(report: Report, reviewers: Record<string, string>, summary: string): string {
   const header = `Health Canada What's New — ${formatDate(report.date_range.from)} to ${formatDate(report.date_range.to)}`;
   const sep = "=".repeat(60);
 
-  // Add reviewer assignments
   const reviewerSection = Object.entries(reviewers).filter(([, v]) => v).map(([url, name]) => `${url}: ${name}`);
   const reviewerText = reviewerSection.length > 0 ? `\n\nReviewer Assignments:\n${reviewerSection.join("\n")}` : "";
 
+  const summarySection = summary ? `\nRegulatory Affairs Summary:\n${summary}\n${sep}\n` : "";
+
   return [
     header, sep,
+    summarySection,
     "\na. Transparency Documents (RDS / SBD / SSR):\n",
     formatTransparencyText(report.transparency_documents),
     `\n${sep}`,
