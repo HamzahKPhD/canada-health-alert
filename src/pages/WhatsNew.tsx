@@ -132,7 +132,7 @@ function ReviewerInput({ value, onChange }: { value: string; onChange: (v: strin
 }
 
 // ---- Text formatters ----
-function formatTransparencyText(docs: DhppDocument[]): string {
+function formatTransparencyText(docs: DhppDocument[], summaries: Record<string, string> = {}): string {
   if (docs.length === 0) return "No transparency documents found for this period.";
   return docs.map((doc) => {
     const lines = [`${doc.is_backdated ? "[BACKDATED] " : ""}${doc.title}`, doc.url];
@@ -147,22 +147,28 @@ function formatTransparencyText(docs: DhppDocument[]): string {
     if (doc.issued_date) lines.push(`Issued Date: ${doc.issued_date}`);
     if (doc.indication_summary && doc.indication_summary !== "Not available for this document type")
       lines.push(`Indication: ${doc.indication_summary}`);
+    if (summaries[doc.url]) lines.push(`Reg Affairs Summary: ${summaries[doc.url]}`);
     return lines.join("\n");
   }).join("\n\n");
 }
 
-function formatGuidanceText(items: GuidanceItem[]): string {
+function formatGuidanceText(items: GuidanceItem[], summaries: Record<string, string> = {}): string {
   if (items.length === 0) return "No guidance documents found for this period.";
-  return items.map((i) => `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}\n(Source: ${i.source})`).join("\n\n");
+  return items.map((i) => {
+    let s = `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}\n(Source: ${i.source})`;
+    if (summaries[i.url]) s += `\nReg Affairs Summary: ${summaries[i.url]}`;
+    return s;
+  }).join("\n\n");
 }
 
-function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[], noDataStatement: string | null): string {
+function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPeriod[], noDataStatement: string | null, summaries: Record<string, string> = {}): string {
   const parts: string[] = [];
   if (medeffect.length > 0) {
     parts.push("MedEffect What's New:");
     parts.push(...medeffect.map((i) => {
       let line = `${i.title} [${i.date}]${i.therapeutic_area ? ` (${i.therapeutic_area})` : ""}\n${i.url}`;
       if (i.is_infowatch && i.az_relevant_info) line += `\nAZ Relevance: ${i.az_relevant_info}`;
+      if (summaries[i.url]) line += `\nReg Affairs Summary: ${summaries[i.url]}`;
       return line;
     }));
   }
