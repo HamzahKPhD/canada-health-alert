@@ -325,6 +325,7 @@ export default function WhatsNew() {
           medeffect_whats_new: report.medeffect_whats_new,
           safety_reviews: report.safety_reviews,
           safety_no_data_statement: report.safety_no_data_statement,
+          summary,
         },
         reviewers,
         notes: reportNotes || null,
