@@ -186,16 +186,18 @@ function formatSafetyText(medeffect: MedEffectItem[], periods: SafetyReviewPerio
   return parts.join("\n");
 }
 
-function formatFullReport(report: Report, reviewers: Record<string, string>): string {
+function formatFullReport(report: Report, reviewers: Record<string, string>, summary: string): string {
   const header = `Health Canada What's New — ${formatDate(report.date_range.from)} to ${formatDate(report.date_range.to)}`;
   const sep = "=".repeat(60);
 
-  // Add reviewer assignments
   const reviewerSection = Object.entries(reviewers).filter(([, v]) => v).map(([url, name]) => `${url}: ${name}`);
   const reviewerText = reviewerSection.length > 0 ? `\n\nReviewer Assignments:\n${reviewerSection.join("\n")}` : "";
 
+  const summarySection = summary ? `\nRegulatory Affairs Summary:\n${summary}\n${sep}\n` : "";
+
   return [
     header, sep,
+    summarySection,
     "\na. Transparency Documents (RDS / SBD / SSR):\n",
     formatTransparencyText(report.transparency_documents),
     `\n${sep}`,
@@ -217,6 +219,8 @@ export default function WhatsNew() {
   const [reviewers, setReviewers] = useState<Record<string, string>>({});
   const [reportNotes, setReportNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  const [summary, setSummary] = useState("");
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const { toast } = useToast();
 
   const setReviewer = (url: string, name: string) => {
@@ -232,6 +236,7 @@ export default function WhatsNew() {
     }
     setLoading(true);
     setReport(null);
+    setSummary("");
     setProgressMsg("Phase 1: Scraping transparency documents...");
     try {
       // Phase 1: DHPP (transparency documents) - via edge function (dhpp.hpfb-dgpsa.ca is not blocked)
@@ -280,6 +285,24 @@ export default function WhatsNew() {
         title: "Report generated",
         description: `${partialReport.transparency_documents.length} transparency docs, ${partialReport.guidance_documents.length} guidance items, ${partialReport.medeffect_whats_new.length} MedEffect items.`,
       });
+
+      // Phase 4: AI-generated regulatory affairs summary
+      setSummaryLoading(true);
+      setProgressMsg("Phase 4: Generating regulatory affairs summary...");
+      try {
+        const reportText = formatFullReport(partialReport, {}, "");
+        const { data: sumData, error: sumErr } = await supabase.functions.invoke("summarize-report", {
+          body: { reportText, dateFrom, dateTo },
+        });
+        if (sumErr) throw sumErr;
+        if (sumData?.error) throw new Error(sumData.error);
+        setSummary(sumData?.summary || "");
+      } catch (err) {
+        console.error("Summary error:", err);
+        toast({ title: "Summary failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+      } finally {
+        setSummaryLoading(false);
+      }
     } catch (err) {
       console.error("Report error:", err);
       toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
@@ -302,6 +325,7 @@ export default function WhatsNew() {
           medeffect_whats_new: report.medeffect_whats_new,
           safety_reviews: report.safety_reviews,
           safety_no_data_statement: report.safety_no_data_statement,
+          summary,
         },
         reviewers,
         notes: reportNotes || null,
@@ -358,13 +382,34 @@ export default function WhatsNew() {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-lg font-semibold">Report: {formatDate(report.date_range.from)} — {formatDate(report.date_range.to)}</h2>
-              <CopyButton getText={() => formatFullReport(report, reviewers)} />
+              <CopyButton getText={() => formatFullReport(report, reviewers, summary)} />
             </div>
 
             {/* TA Legend */}
             <div className="flex flex-wrap gap-2 text-xs">
               {Object.keys(TA_COLORS).map((ta) => (<TaBadge key={ta} ta={ta} />))}
             </div>
+
+            {/* Regulatory Affairs Summary */}
+            {(summary || summaryLoading) && (
+              <Card className="overflow-hidden border-primary/30">
+                <div className="flex items-center justify-between p-4 bg-primary/5 border-b border-border/60">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <h3 className="font-semibold text-sm">Regulatory Affairs Summary</h3>
+                    {summaryLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                  </div>
+                  {summary && <CopyButton getText={() => summary} />}
+                </div>
+                <div className="p-4">
+                  {summaryLoading && !summary ? (
+                    <p className="text-sm text-muted-foreground animate-pulse">Analyzing findings for regulatory affairs impact...</p>
+                  ) : (
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{summary}</p>
+                  )}
+                </div>
+              </Card>
+            )}
 
             {/* Section A: Transparency Documents */}
             <Card className="overflow-hidden">
