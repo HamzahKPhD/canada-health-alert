@@ -494,23 +494,26 @@ export default function WhatsNew() {
                   <h3 className="font-semibold text-sm">b. Guidance, Notices, ICH, Consultations</h3>
                   <Badge variant="secondary" className="text-xs">{report.guidance_documents.length}</Badge>
                 </div>
-                <CopyButton getText={() => formatGuidanceText(report.guidance_documents)} />
+                <CopyButton getText={() => formatGuidanceText(report.guidance_documents, entrySummaries)} />
               </div>
               <div className="p-4 space-y-3">
                 {report.guidance_documents.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No guidance documents found.</p>
                 ) : (
                   report.guidance_documents.map((item, i) => (
-                    <div key={i} className="flex items-start gap-3 text-sm">
-                      <Badge variant="outline" className="text-xs shrink-0 mt-0.5">{item.source}</Badge>
-                      <TaBadge ta={item.therapeutic_area} />
-                      <div className="flex-1">
-                        <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
-                          {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
-                        </a>
-                        <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                    <div key={i} className="text-sm">
+                      <div className="flex items-start gap-3">
+                        <Badge variant="outline" className="text-xs shrink-0 mt-0.5">{item.source}</Badge>
+                        <TaBadge ta={item.therapeutic_area} />
+                        <div className="flex-1">
+                          <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
+                            {item.title}<ExternalLink className="inline h-3 w-3 ml-1 opacity-50" />
+                          </a>
+                          <span className="text-xs text-muted-foreground ml-2">[{item.date}]</span>
+                        </div>
+                        <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
                       </div>
-                      <ReviewerInput value={reviewers[item.url] || ""} onChange={(v) => setReviewer(item.url, v)} />
+                      <EntrySummary url={item.url} summaries={entrySummaries} loading={summarizingUrls} />
                     </div>
                   ))
                 )}
