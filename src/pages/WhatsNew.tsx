@@ -285,6 +285,24 @@ export default function WhatsNew() {
         title: "Report generated",
         description: `${partialReport.transparency_documents.length} transparency docs, ${partialReport.guidance_documents.length} guidance items, ${partialReport.medeffect_whats_new.length} MedEffect items.`,
       });
+
+      // Phase 4: AI-generated regulatory affairs summary
+      setSummaryLoading(true);
+      setProgressMsg("Phase 4: Generating regulatory affairs summary...");
+      try {
+        const reportText = formatFullReport(partialReport, {}, "");
+        const { data: sumData, error: sumErr } = await supabase.functions.invoke("summarize-report", {
+          body: { reportText, dateFrom, dateTo },
+        });
+        if (sumErr) throw sumErr;
+        if (sumData?.error) throw new Error(sumData.error);
+        setSummary(sumData?.summary || "");
+      } catch (err) {
+        console.error("Summary error:", err);
+        toast({ title: "Summary failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+      } finally {
+        setSummaryLoading(false);
+      }
     } catch (err) {
       console.error("Report error:", err);
       toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
