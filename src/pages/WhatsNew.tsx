@@ -289,23 +289,45 @@ export default function WhatsNew() {
         description: `${partialReport.transparency_documents.length} transparency docs, ${partialReport.guidance_documents.length} guidance items, ${partialReport.medeffect_whats_new.length} MedEffect items.`,
       });
 
-      // Phase 4: AI-generated regulatory affairs summary
-      setSummaryLoading(true);
-      setProgressMsg("Phase 4: Generating regulatory affairs summary...");
-      try {
-        const reportText = formatFullReport(partialReport, {}, "");
-        const { data: sumData, error: sumErr } = await supabase.functions.invoke("summarize-report", {
-          body: { reportText, dateFrom, dateTo },
-        });
-        if (sumErr) throw sumErr;
-        if (sumData?.error) throw new Error(sumData.error);
-        setSummary(sumData?.summary || "");
-      } catch (err) {
-        console.error("Summary error:", err);
-        toast({ title: "Summary failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
-      } finally {
-        setSummaryLoading(false);
-      }
+      // Phase 4: Per-entry AI regulatory affairs summaries (parallel, batched)
+      setProgressMsg("Phase 4: Generating per-entry regulatory affairs summaries...");
+      const allEntries: { url: string; title: string; type: string; metadata: any }[] = [
+        ...partialReport.transparency_documents.map((d) => ({
+          url: d.url, title: d.title, type: d.type,
+          metadata: { product_type: d.product_type, control_number: d.control_number, din: d.din, manufacturer: d.manufacturer, submission_type: d.submission_type, decision_date: d.decision_date, issued_date: d.issued_date, indication_summary: d.indication_summary, therapeutic_area: d.therapeutic_area },
+        })),
+        ...partialReport.guidance_documents.map((g) => ({
+          url: g.url, title: g.title, type: `Guidance/${g.source}`,
+          metadata: { date: g.date, therapeutic_area: g.therapeutic_area, source: g.source },
+        })),
+        ...partialReport.medeffect_whats_new.map((m) => ({
+          url: m.url, title: m.title, type: m.is_infowatch ? "MedEffect/InfoWatch" : "MedEffect",
+          metadata: { date: m.date, therapeutic_area: m.therapeutic_area, az_relevant_info: m.az_relevant_info },
+        })),
+      ];
+
+      const CONCURRENCY = 4;
+      let idx = 0;
+      const worker = async () => {
+        while (idx < allEntries.length) {
+          const i = idx++;
+          const entry = allEntries[i];
+          setSummarizingUrls((prev) => new Set(prev).add(entry.url));
+          try {
+            const { data, error } = await supabase.functions.invoke("summarize-entry", { body: entry });
+            if (error) throw error;
+            if (data?.error) throw new Error(data.error);
+            if (data?.summary) {
+              setEntrySummaries((prev) => ({ ...prev, [entry.url]: data.summary }));
+            }
+          } catch (err) {
+            console.error("Entry summary failed", entry.url, err);
+          } finally {
+            setSummarizingUrls((prev) => { const n = new Set(prev); n.delete(entry.url); return n; });
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, allEntries.length) }, worker));
     } catch (err) {
       console.error("Report error:", err);
       toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
