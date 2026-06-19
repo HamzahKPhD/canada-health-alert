@@ -131,6 +131,26 @@ function ReviewerInput({ value, onChange }: { value: string; onChange: (v: strin
   );
 }
 
+function EntrySummary({ url, summaries, loading }: { url: string; summaries: Record<string, string>; loading: Set<string> }) {
+  const s = summaries[url];
+  const isLoading = loading.has(url);
+  if (!s && !isLoading) return null;
+  return (
+    <div className="mt-2 ml-12 text-xs bg-primary/5 border border-primary/20 rounded p-2">
+      <div className="flex items-center gap-1.5 mb-1">
+        <FileText className="h-3 w-3 text-primary" />
+        <span className="font-medium text-foreground">Reg Affairs Summary</span>
+        {isLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+      </div>
+      {s ? (
+        <p className="text-muted-foreground leading-relaxed">{s}</p>
+      ) : (
+        <p className="text-muted-foreground italic animate-pulse">Generating…</p>
+      )}
+    </div>
+  );
+}
+
 // ---- Text formatters ----
 function formatTransparencyText(docs: DhppDocument[], summaries: Record<string, string> = {}): string {
   if (docs.length === 0) return "No transparency documents found for this period.";
