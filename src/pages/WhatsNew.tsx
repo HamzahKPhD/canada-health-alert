@@ -446,7 +446,7 @@ export default function WhatsNew() {
                     <Badge variant="destructive" className="text-xs gap-1"><Clock className="h-3 w-3" />{backdatedCount} backdated</Badge>
                   )}
                 </div>
-                <CopyButton getText={() => formatTransparencyText(report.transparency_documents)} />
+                <CopyButton getText={() => formatTransparencyText(report.transparency_documents, entrySummaries)} />
               </div>
               <div className="p-4 space-y-4">
                 {report.transparency_documents.length === 0 ? (
