@@ -236,6 +236,7 @@ export default function WhatsNew() {
     }
     setLoading(true);
     setReport(null);
+    setSummary("");
     setProgressMsg("Phase 1: Scraping transparency documents...");
     try {
       // Phase 1: DHPP (transparency documents) - via edge function (dhpp.hpfb-dgpsa.ca is not blocked)
