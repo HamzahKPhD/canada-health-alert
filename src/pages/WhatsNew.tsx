@@ -479,6 +479,7 @@ export default function WhatsNew() {
                           <span className="text-muted-foreground">{doc.indication_summary}</span>
                         </div>
                       )}
+                      <EntrySummary url={doc.url} summaries={entrySummaries} loading={summarizingUrls} />
                     </div>
                   ))
                 )}
