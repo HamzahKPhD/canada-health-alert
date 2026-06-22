@@ -241,6 +241,46 @@ function formatFullReport(report: Report, reviewers: Record<string, string>, sum
   ].join("\n");
 }
 
+// Group every report entry by therapeutic area for email distribution.
+interface TaEntry { title: string; url: string; date: string | null; kind: string; ta: string; summary?: string; extra?: string }
+function groupEntriesByTa(report: Report, summaries: Record<string, string>): Record<string, TaEntry[]> {
+  const groups: Record<string, TaEntry[]> = { CMC: [], CVRM: [], CTA: [], ONC: [], OTHER: [] };
+  const push = (e: TaEntry) => { (groups[e.ta] || groups.OTHER).push(e); };
+  for (const d of report.transparency_documents) {
+    push({ title: d.title, url: d.url, date: d.decision_date || d.issued_date || d.date_filed, kind: d.type, ta: d.therapeutic_area || "OTHER", summary: summaries[d.url], extra: d.indication_summary && d.indication_summary !== "Not available for this document type" ? `Indication: ${d.indication_summary}` : undefined });
+  }
+  for (const g of report.guidance_documents) {
+    push({ title: g.title, url: g.url, date: g.date, kind: `Guidance/${g.source}`, ta: g.therapeutic_area || "OTHER", summary: summaries[g.url] });
+  }
+  for (const m of report.medeffect_whats_new) {
+    push({ title: m.title, url: m.url, date: m.date, kind: m.is_infowatch ? "InfoWatch" : "MedEffect", ta: m.therapeutic_area || "OTHER", summary: summaries[m.url] });
+  }
+  for (const p of report.safety_reviews) {
+    for (const r of p.reviews) {
+      push({ title: `${r.brand_name} (${r.ingredient}) — ${r.safety_issue}`, url: "", date: p.period, kind: `Safety Review [${r.trigger}]`, ta: r.therapeutic_area || "OTHER" });
+    }
+  }
+  return groups;
+}
+
+function buildMailto(ta: string, recipient: string, dateFrom: string, dateTo: string, entries: TaEntry[]): string {
+  const subject = `[${ta}] Health Canada What's New — ${dateFrom} to ${dateTo}`;
+  const lines: string[] = [];
+  lines.push(`Hello,`, ``, `Please review the following ${ta} items from the Health Canada What's New screening (${dateFrom} to ${dateTo}):`, ``);
+  entries.forEach((e, i) => {
+    lines.push(`${i + 1}. [${e.kind}] ${e.title}${e.date ? ` (${e.date})` : ""}`);
+    if (e.url) lines.push(`   ${e.url}`);
+    if (e.extra) lines.push(`   ${e.extra}`);
+    if (e.summary) lines.push(`   Reg Affairs Summary: ${e.summary}`);
+    lines.push(``);
+  });
+  lines.push(`— Generated via the Health Canada What's New Report Generator`);
+  const body = lines.join("\n");
+  return `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+
+
 export default function WhatsNew() {
   const defaults = getDefaultDates();
   const [dateFrom, setDateFrom] = useState(defaults.from);
