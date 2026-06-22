@@ -19,6 +19,7 @@ import {
   Clock,
   Save,
   Archive,
+  Mail,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 
