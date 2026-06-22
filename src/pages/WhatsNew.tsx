@@ -19,6 +19,7 @@ import {
   Clock,
   Save,
   Archive,
+  Mail,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -84,10 +85,17 @@ const TA_COLORS: Record<string, string> = {
   CVRM: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
   CTA: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
   ONC: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
-  RAOE: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  "RV&IT": "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
   OTHER: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200",
 };
+
+const TA_LABELS: Record<string, string> = {
+  CMC: "CMC — Chemistry, Manufacturing & Controls",
+  CVRM: "CVRM — Cardiovascular, Renal & Metabolism",
+  CTA: "CTA — Clinical Trial Application",
+  ONC: "ONC — Oncology",
+  OTHER: "Other",
+};
+const TA_ORDER = ["CMC", "CVRM", "CTA", "ONC", "OTHER"] as const;
 
 function getDefaultDates() {
   const to = new Date();
@@ -233,6 +241,46 @@ function formatFullReport(report: Report, reviewers: Record<string, string>, sum
   ].join("\n");
 }
 
+// Group every report entry by therapeutic area for email distribution.
+interface TaEntry { title: string; url: string; date: string | null; kind: string; ta: string; summary?: string; extra?: string }
+function groupEntriesByTa(report: Report, summaries: Record<string, string>): Record<string, TaEntry[]> {
+  const groups: Record<string, TaEntry[]> = { CMC: [], CVRM: [], CTA: [], ONC: [], OTHER: [] };
+  const push = (e: TaEntry) => { (groups[e.ta] || groups.OTHER).push(e); };
+  for (const d of report.transparency_documents) {
+    push({ title: d.title, url: d.url, date: d.decision_date || d.issued_date || d.date_filed, kind: d.type, ta: d.therapeutic_area || "OTHER", summary: summaries[d.url], extra: d.indication_summary && d.indication_summary !== "Not available for this document type" ? `Indication: ${d.indication_summary}` : undefined });
+  }
+  for (const g of report.guidance_documents) {
+    push({ title: g.title, url: g.url, date: g.date, kind: `Guidance/${g.source}`, ta: g.therapeutic_area || "OTHER", summary: summaries[g.url] });
+  }
+  for (const m of report.medeffect_whats_new) {
+    push({ title: m.title, url: m.url, date: m.date, kind: m.is_infowatch ? "InfoWatch" : "MedEffect", ta: m.therapeutic_area || "OTHER", summary: summaries[m.url] });
+  }
+  for (const p of report.safety_reviews) {
+    for (const r of p.reviews) {
+      push({ title: `${r.brand_name} (${r.ingredient}) — ${r.safety_issue}`, url: "", date: p.period, kind: `Safety Review [${r.trigger}]`, ta: r.therapeutic_area || "OTHER" });
+    }
+  }
+  return groups;
+}
+
+function buildMailto(ta: string, recipient: string, dateFrom: string, dateTo: string, entries: TaEntry[]): string {
+  const subject = `[${ta}] Health Canada What's New — ${dateFrom} to ${dateTo}`;
+  const lines: string[] = [];
+  lines.push(`Hello,`, ``, `Please review the following ${ta} items from the Health Canada What's New screening (${dateFrom} to ${dateTo}):`, ``);
+  entries.forEach((e, i) => {
+    lines.push(`${i + 1}. [${e.kind}] ${e.title}${e.date ? ` (${e.date})` : ""}`);
+    if (e.url) lines.push(`   ${e.url}`);
+    if (e.extra) lines.push(`   ${e.extra}`);
+    if (e.summary) lines.push(`   Reg Affairs Summary: ${e.summary}`);
+    lines.push(``);
+  });
+  lines.push(`— Generated via the Health Canada What's New Report Generator`);
+  const body = lines.join("\n");
+  return `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+
+
 export default function WhatsNew() {
   const defaults = getDefaultDates();
   const [dateFrom, setDateFrom] = useState(defaults.from);
@@ -244,6 +292,20 @@ export default function WhatsNew() {
   const [saving, setSaving] = useState(false);
   const [entrySummaries, setEntrySummaries] = useState<Record<string, string>>({});
   const [summarizingUrls, setSummarizingUrls] = useState<Set<string>>(new Set());
+  const [taRecipients, setTaRecipients] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("ta_recipients") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const setTaRecipient = (ta: string, email: string) => {
+    setTaRecipients((prev) => {
+      const next = { ...prev, [ta]: email };
+      localStorage.setItem("ta_recipients", JSON.stringify(next));
+      return next;
+    });
+  };
   const { toast } = useToast();
 
   const setReviewer = (url: string, name: string) => {
@@ -612,6 +674,51 @@ export default function WhatsNew() {
                 )}
               </div>
             </Card>
+
+            {/* Email by Therapeutic Area */}
+            {(() => {
+              const groups = groupEntriesByTa(report, entrySummaries);
+              return (
+                <Card className="p-5 space-y-3">
+                  <h3 className="font-semibold text-sm flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-primary" />
+                    Email Items by Regulatory Affairs Department
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Enter a recipient for each department, then click "Email" to open your mail client with the items pre-filled. Recipients are remembered on this device.
+                  </p>
+                  <div className="space-y-2">
+                    {TA_ORDER.map((ta) => {
+                      const entries = groups[ta] || [];
+                      const recipient = taRecipients[ta] || "";
+                      const disabled = entries.length === 0 || !recipient.trim();
+                      const href = disabled ? "#" : buildMailto(ta, recipient.trim(), report.date_range.from, report.date_range.to, entries);
+                      return (
+                        <div key={ta} className="flex flex-wrap items-center gap-2 p-2 rounded border border-border/40">
+                          <TaBadge ta={ta} />
+                          <span className="text-xs text-muted-foreground flex-1 min-w-[180px]">{TA_LABELS[ta]}</span>
+                          <Badge variant="secondary" className="text-xs">{entries.length} item{entries.length === 1 ? "" : "s"}</Badge>
+                          <Input
+                            type="email"
+                            placeholder="recipient@example.com"
+                            value={recipient}
+                            onChange={(e) => setTaRecipient(ta, e.target.value)}
+                            className="h-8 text-xs w-56"
+                          />
+                          <Button asChild={!disabled} size="sm" variant="outline" disabled={disabled} className="gap-1.5">
+                            {disabled ? (
+                              <span><Mail className="h-3.5 w-3.5" />Email</span>
+                            ) : (
+                              <a href={href}><Mail className="h-3.5 w-3.5" />Email</a>
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              );
+            })()}
 
             {/* Save Report */}
             <Card className="p-5 space-y-3">
