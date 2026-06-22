@@ -252,6 +252,20 @@ export default function WhatsNew() {
   const [saving, setSaving] = useState(false);
   const [entrySummaries, setEntrySummaries] = useState<Record<string, string>>({});
   const [summarizingUrls, setSummarizingUrls] = useState<Set<string>>(new Set());
+  const [taRecipients, setTaRecipients] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("ta_recipients") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const setTaRecipient = (ta: string, email: string) => {
+    setTaRecipients((prev) => {
+      const next = { ...prev, [ta]: email };
+      localStorage.setItem("ta_recipients", JSON.stringify(next));
+      return next;
+    });
+  };
   const { toast } = useToast();
 
   const setReviewer = (url: string, name: string) => {
