@@ -84,10 +84,17 @@ const TA_COLORS: Record<string, string> = {
   CVRM: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
   CTA: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
   ONC: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
-  RAOE: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  "RV&IT": "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
   OTHER: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200",
 };
+
+const TA_LABELS: Record<string, string> = {
+  CMC: "CMC — Chemistry, Manufacturing & Controls",
+  CVRM: "CVRM — Cardiovascular, Renal & Metabolism",
+  CTA: "CTA — Clinical Trial Application",
+  ONC: "ONC — Oncology",
+  OTHER: "Other",
+};
+const TA_ORDER = ["CMC", "CVRM", "CTA", "ONC", "OTHER"] as const;
 
 function getDefaultDates() {
   const to = new Date();

@@ -30,13 +30,12 @@ function isInRange(dateStr: string | null, from: string, to: string): boolean {
 }
 
 function classifyTherapeuticArea(title: string, indication: string | null): string {
+  // CMC, CVRM, CTA, ONC, OTHER — Regulatory Affairs department buckets.
   const text = `${title} ${indication || ''}`.toLowerCase();
-  if (/\b(chemistry|manufacturing|controls|cmc|formulation|stability|impurit|excipient|specification|analytical|dissolution|bioequivalence)\b/.test(text)) return 'CMC';
-  if (/\b(cancer|oncolog|tumor|tumour|carcinoma|lymphoma|leukemia|leukaemia|melanoma|sarcoma|myeloma|neoplasm|chemotherapy|anti-cancer|antineoplastic|metasta|malignant|glioblastoma|immunotherapy for.*cancer|checkpoint inhibitor)\b/.test(text)) return 'ONC';
-  if (/\b(cardiovascular|cardiac|heart|hypertension|diabetes|diabet|insulin|renal|kidney|metaboli|cholesterol|lipid|statin|anticoagulant|thrombosis|atherosclerosis|arrhythmia|angina|myocardial|obesity|dyslipidemia|nephro|dialysis|glp-1|sglt2|dpp-4)\b/.test(text)) return 'CVRM';
-  if (/\b(clinical trial|cta |phase [i1-3]|investigational|trial application)\b/.test(text)) return 'CTA';
-  if (/\b(regulatory|compliance|enforcement|inspection|recall|guidance|policy|label|labelling|monograph|form |notice|administrative|procedural)\b/.test(text)) return 'RAOE';
-  if (/\b(vaccine|vaccin|infectious|infection|antiviral|antibiotic|antimicrobial|hiv|hepatitis|influenza|covid|sars|tuberculosis|malaria|fungal|antifungal|immunization|pandemic|pathogen|viral|bacteria)\b/.test(text)) return 'RV&IT';
+  if (/\b(cancer|oncolog|tumor|tumour|carcinoma|lymphoma|leukemia|leukaemia|melanoma|sarcoma|myeloma|neoplasm|chemotherap|anti-cancer|antineoplastic|metasta|malignant|glioblastoma|checkpoint inhibitor|her2|egfr|pd-l1|pd-1)\b/.test(text)) return 'ONC';
+  if (/\b(cardiovascular|cardiac|heart|hypertens|diabet|insulin|renal|kidney|metaboli|cholesterol|lipid|statin|anticoagulant|thrombo|atherosclero|arrhythmia|angina|myocardial|obesity|dyslipidemia|nephro|dialysis|glp-1|sglt2|dpp-4|heart failure|stroke)\b/.test(text)) return 'CVRM';
+  if (/\b(clinical trial application|cta\b|investigational new drug|\bind\b|trial application|phase\s?[i1-3]|investigator brochure)\b/.test(text)) return 'CTA';
+  if (/\b(chemistry|manufacturing|cmc|formulation|stability|impurit|excipient|\bspecification|analytical method|dissolution|bioequivalence|drug substance|drug product|api\b|gmp\b|good manufacturing)\b/.test(text)) return 'CMC';
   return 'OTHER';
 }
 
