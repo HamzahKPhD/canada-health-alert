@@ -675,6 +675,51 @@ export default function WhatsNew() {
               </div>
             </Card>
 
+            {/* Email by Therapeutic Area */}
+            {(() => {
+              const groups = groupEntriesByTa(report, entrySummaries);
+              return (
+                <Card className="p-5 space-y-3">
+                  <h3 className="font-semibold text-sm flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-primary" />
+                    Email Items by Regulatory Affairs Department
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Enter a recipient for each department, then click "Email" to open your mail client with the items pre-filled. Recipients are remembered on this device.
+                  </p>
+                  <div className="space-y-2">
+                    {TA_ORDER.map((ta) => {
+                      const entries = groups[ta] || [];
+                      const recipient = taRecipients[ta] || "";
+                      const disabled = entries.length === 0 || !recipient.trim();
+                      const href = disabled ? "#" : buildMailto(ta, recipient.trim(), report.date_range.from, report.date_range.to, entries);
+                      return (
+                        <div key={ta} className="flex flex-wrap items-center gap-2 p-2 rounded border border-border/40">
+                          <TaBadge ta={ta} />
+                          <span className="text-xs text-muted-foreground flex-1 min-w-[180px]">{TA_LABELS[ta]}</span>
+                          <Badge variant="secondary" className="text-xs">{entries.length} item{entries.length === 1 ? "" : "s"}</Badge>
+                          <Input
+                            type="email"
+                            placeholder="recipient@example.com"
+                            value={recipient}
+                            onChange={(e) => setTaRecipient(ta, e.target.value)}
+                            className="h-8 text-xs w-56"
+                          />
+                          <Button asChild={!disabled} size="sm" variant="outline" disabled={disabled} className="gap-1.5">
+                            {disabled ? (
+                              <span><Mail className="h-3.5 w-3.5" />Email</span>
+                            ) : (
+                              <a href={href}><Mail className="h-3.5 w-3.5" />Email</a>
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              );
+            })()}
+
             {/* Save Report */}
             <Card className="p-5 space-y-3">
               <h3 className="font-semibold text-sm flex items-center gap-2">
