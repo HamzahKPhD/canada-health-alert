@@ -91,8 +91,9 @@ export async function downloadPageAsPdf(url: string, title: string): Promise<voi
           windowWidth: 1024,
         },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        // @ts-ignore - pagebreak is supported at runtime but missing from types
         pagebreak: { mode: ["css", "legacy"] },
-      })
+      } as any)
       .save();
   } finally {
     iframe.remove();
