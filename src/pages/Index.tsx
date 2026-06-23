@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { ReviewDocumentCard } from "@/components/ReviewDocumentCard";
@@ -6,8 +6,10 @@ import { ScanStatus } from "@/components/ScanStatus";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Search, ShieldCheck, FileText } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Search, ShieldCheck, FileText, Download, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { downloadManyAsPdf } from "@/lib/pdf-download";
 
 interface ReviewDocument {
   id: string;
@@ -34,12 +36,17 @@ interface ScanLog {
   status: string;
 }
 
+const PAGE_SIZE = 1000;
+
 export default function Index() {
   const [documents, setDocuments] = useState<ReviewDocument[]>([]);
   const [lastScan, setLastScan] = useState<ScanLog | null>(null);
   const [loading, setLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<{ done: number; total: number; title: string } | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -49,17 +56,25 @@ export default function Index() {
 
   async function fetchDocuments() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("review_documents")
-      .select("*")
-      .order("first_seen_at", { ascending: false })
-      .limit(200);
-
-    if (error) {
-      console.error("Error fetching documents:", error);
-    } else {
-      setDocuments((data as ReviewDocument[]) || []);
+    // Page through all rows — there can be thousands
+    const all: ReviewDocument[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("review_documents")
+        .select("*")
+        .order("first_seen_at", { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) {
+        console.error("Error fetching documents:", error);
+        break;
+      }
+      if (!data || data.length === 0) break;
+      all.push(...(data as ReviewDocument[]));
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
     }
+    setDocuments(all);
     setLoading(false);
   }
 
@@ -70,24 +85,18 @@ export default function Index() {
       .order("scanned_at", { ascending: false })
       .limit(1)
       .single();
-
     if (data) setLastScan(data as ScanLog);
   }
 
   async function handleScan() {
     setIsScanning(true);
     try {
-      const { data, error } = await supabase.functions.invoke(
-        "scrape-health-canada"
-      );
-
+      const { data, error } = await supabase.functions.invoke("scrape-health-canada");
       if (error) throw error;
-
       toast({
         title: "Scan complete",
         description: `Found ${data.scraped} documents. ${data.new_documents} new.`,
       });
-
       await fetchDocuments();
       await fetchLastScan();
     } catch (err) {
@@ -102,27 +111,74 @@ export default function Index() {
     }
   }
 
-  const filtered = documents.filter((doc) => {
-    if (!searchQuery) return true;
+  const filtered = useMemo(() => {
+    if (!searchQuery) return documents;
     const q = searchQuery.toLowerCase();
-    return (
+    return documents.filter((doc) =>
       doc.title.toLowerCase().includes(q) ||
       doc.manufacturer?.toLowerCase().includes(q) ||
       doc.din?.toLowerCase().includes(q) ||
-      doc.control_number?.toLowerCase().includes(q)
+      doc.control_number?.toLowerCase().includes(q) ||
+      doc.product_type?.toLowerCase().includes(q) ||
+      doc.submission_type?.toLowerCase().includes(q) ||
+      doc.indication_summary?.toLowerCase().includes(q)
     );
-  });
+  }, [documents, searchQuery]);
+
+  function toggleOne(id: string, checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every((d) => selected.has(d.id));
+  function toggleAllVisible(checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) filtered.forEach((d) => next.add(d.id));
+      else filtered.forEach((d) => next.delete(d.id));
+      return next;
+    });
+  }
+
+  async function handleDownload() {
+    const items = documents
+      .filter((d) => selected.has(d.id))
+      .map((d) => ({ url: d.url, title: d.title }));
+    if (items.length === 0) return;
+    setDownloading(true);
+    setDownloadProgress({ done: 0, total: items.length, title: items[0].title });
+    try {
+      const result = await downloadManyAsPdf(items, (done, total, title) =>
+        setDownloadProgress({ done, total, title })
+      );
+      toast({
+        title: "Download complete",
+        description: `${result.success} saved${result.failed.length ? `, ${result.failed.length} failed` : ""}.`,
+        variant: result.failed.length ? "destructive" : "default",
+      });
+      if (result.failed.length) {
+        console.error("Failed PDFs:", result.failed);
+      }
+    } catch (err) {
+      console.error(err);
+      toast({ title: "Download failed", description: String(err), variant: "destructive" });
+    } finally {
+      setDownloading(false);
+      setDownloadProgress(null);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border/60 bg-card">
         <div className="container max-w-5xl mx-auto px-4 py-6">
           <div className="flex items-center gap-3 mb-1">
             <ShieldCheck className="h-7 w-7 text-primary" />
-            <h1 className="text-2xl font-bold tracking-tight">
-              Health Canada Monitor
-            </h1>
+            <h1 className="text-2xl font-bold tracking-tight">Health Canada Monitor</h1>
           </div>
           <p className="text-muted-foreground text-sm ml-10">
             Tracking review decisions from the Drug and Health Product Portal
@@ -139,32 +195,58 @@ export default function Index() {
       </header>
 
       <main className="container max-w-5xl mx-auto px-4 py-6 space-y-5">
-        {/* Scan Status */}
-        <ScanStatus
-          lastScan={lastScan}
-          isScanning={isScanning}
-          onScan={handleScan}
-        />
+        <ScanStatus lastScan={lastScan} isScanning={isScanning} onScan={handleScan} />
 
-        {/* Search */}
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search by name, manufacturer, DIN, or control number..."
+            placeholder="Search by name, manufacturer, DIN, control #, indication..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10"
           />
         </div>
 
-        {/* Results count */}
         {!loading && (
-          <p className="text-sm text-muted-foreground">
-            Showing {filtered.length} of {documents.length} documents
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
+                <Checkbox
+                  checked={allVisibleSelected}
+                  onCheckedChange={(c) => toggleAllVisible(!!c)}
+                />
+                Select all visible
+              </label>
+              <span className="text-sm text-muted-foreground">
+                Showing {filtered.length} of {documents.length} · {selected.size} selected
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {selected.size > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+              )}
+              <Button
+                size="sm"
+                onClick={handleDownload}
+                disabled={selected.size === 0 || downloading}
+                className="gap-2"
+              >
+                {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                Download {selected.size > 0 ? `(${selected.size})` : ""} as PDF
+              </Button>
+            </div>
+          </div>
         )}
 
-        {/* Documents list */}
+        {downloadProgress && (
+          <div className="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-sm">
+            Generating PDF {downloadProgress.done + 1} of {downloadProgress.total}:{" "}
+            <span className="text-muted-foreground">{downloadProgress.title}</span>
+          </div>
+        )}
+
         <div className="space-y-3">
           {loading ? (
             Array.from({ length: 5 }).map((_, i) => (
@@ -176,8 +258,7 @@ export default function Index() {
                 <div className="space-y-2">
                   <p className="text-lg font-medium">No documents yet</p>
                   <p className="text-sm">
-                    Click "Scan Now" to fetch the latest review decisions from
-                    Health Canada.
+                    Click "Scan Now" to fetch every SBD/RDS from Health Canada.
                   </p>
                 </div>
               ) : (
@@ -186,7 +267,17 @@ export default function Index() {
             </div>
           ) : (
             filtered.map((doc) => (
-              <ReviewDocumentCard key={doc.id} doc={doc} latestScanAt={lastScan?.scanned_at ?? null} />
+              <div key={doc.id} className="flex items-start gap-3">
+                <Checkbox
+                  className="mt-5"
+                  checked={selected.has(doc.id)}
+                  onCheckedChange={(c) => toggleOne(doc.id, !!c)}
+                  aria-label={`Select ${doc.title}`}
+                />
+                <div className="flex-1 min-w-0">
+                  <ReviewDocumentCard doc={doc} latestScanAt={lastScan?.scanned_at ?? null} />
+                </div>
+              </div>
             ))
           )}
         </div>
