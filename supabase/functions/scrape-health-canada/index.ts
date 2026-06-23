@@ -6,7 +6,8 @@ const corsHeaders = {
 };
 
 const BASE_URL = 'https://dhpp.hpfb-dgpsa.ca/review-documents';
-const PAGES_TO_SCRAPE = 3;
+const MAX_PAGES = 400;
+const CONCURRENCY = 6;
 
 interface ReviewDocument {
   title: string;
