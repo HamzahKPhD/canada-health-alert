@@ -7,7 +7,8 @@ const corsHeaders = {
 
 const BASE_URL = 'https://dhpp.hpfb-dgpsa.ca/review-documents';
 const MAX_PAGES = 400;
-const CONCURRENCY = 6;
+const CONCURRENCY = 12;
+const MAX_CONSECUTIVE_EMPTY = 3; // tolerate transient empty pages before stopping
 
 interface ReviewDocument {
   title: string;
