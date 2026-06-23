@@ -167,30 +167,41 @@ Deno.serve(async (req) => {
     );
 
     const allDocuments: ReviewDocument[] = [];
+    let stopRequested = false;
 
-    for (let page = 0; page < PAGES_TO_SCRAPE; page++) {
-      const url = page === 0 ? BASE_URL : `${BASE_URL}?page=${page}`;
-      console.log(`Fetching page ${page}: ${url}`);
+    // Scrape all listing pages in parallel batches, stop when an empty page is hit
+    for (let batchStart = 0; batchStart < MAX_PAGES && !stopRequested; batchStart += CONCURRENCY) {
+      const batch = Array.from({ length: CONCURRENCY }, (_, i) => batchStart + i)
+        .filter((p) => p < MAX_PAGES);
 
-      try {
-        const response = await fetch(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; HealthCanadaMonitor/1.0)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          },
-        });
+      const results = await Promise.all(
+        batch.map(async (page) => {
+          const url = page === 0 ? BASE_URL : `${BASE_URL}?page=${page}`;
+          try {
+            const response = await fetch(url, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (compatible; HealthCanadaMonitor/1.0)',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              },
+            });
+            if (!response.ok) return { page, docs: [] as ReviewDocument[] };
+            const html = await response.text();
+            return { page, docs: parseDocumentsFromHtml(html) };
+          } catch (err) {
+            console.error(`Error fetching page ${page}:`, err);
+            return { page, docs: [] as ReviewDocument[] };
+          }
+        })
+      );
 
-        if (!response.ok) {
-          console.error(`Failed to fetch page ${page}: ${response.status}`);
-          continue;
+      for (const { page, docs } of results.sort((a, b) => a.page - b.page)) {
+        if (docs.length === 0) {
+          stopRequested = true;
+          console.log(`Page ${page} empty — stopping pagination.`);
+          break;
         }
-
-        const html = await response.text();
-        const docs = parseDocumentsFromHtml(html);
-        console.log(`Page ${page}: found ${docs.length} documents`);
+        console.log(`Page ${page}: ${docs.length} docs`);
         allDocuments.push(...docs);
-      } catch (err) {
-        console.error(`Error fetching page ${page}:`, err);
       }
     }
 
