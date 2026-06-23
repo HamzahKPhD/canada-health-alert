@@ -1,11 +1,16 @@
 // Client-side: fetch a Health Canada document page via CORS proxy, force every
-// <details>/expandable section open, render in a hidden iframe, then save as PDF
-// using html2pdf.js. Mirrors the "Expand All" view the user sees in-browser.
+// <details>/expandable section open, inject into the main document, then save
+// as PDF using html2pdf.js. Mirrors the "Expand all" view the user sees.
 
 // @ts-ignore - no types shipped
 import html2pdf from "html2pdf.js";
 
-const PROXY = "https://corsproxy.io/?";
+// Try multiple CORS proxies in order — corsproxy.io occasionally rate-limits.
+const PROXIES = [
+  (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+  (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  (u: string) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
+];
 
 function sanitizeFileName(name: string): string {
   return name
@@ -16,69 +21,118 @@ function sanitizeFileName(name: string): string {
 }
 
 async function fetchPageHtml(url: string): Promise<string> {
-  const res = await fetch(`${PROXY}${encodeURIComponent(url)}`);
-  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
-  return await res.text();
-}
-
-function prepareHtml(rawHtml: string, sourceUrl: string): string {
-  let html = rawHtml;
-
-  // Inject <base> so relative CSS/images resolve against the origin
-  const baseTag = `<base href="${sourceUrl}">`;
-  if (/<head[^>]*>/i.test(html)) {
-    html = html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
-  } else {
-    html = `${baseTag}${html}`;
+  let lastErr: unknown = null;
+  for (const build of PROXIES) {
+    try {
+      const res = await fetch(build(url));
+      if (!res.ok) {
+        lastErr = new Error(`status ${res.status}`);
+        continue;
+      }
+      const text = await res.text();
+      if (text && text.length > 500) return text;
+    } catch (err) {
+      lastErr = err;
+    }
   }
-
-  // Force every <details> open (matches the site's "Expand all" button)
-  html = html.replace(/<details(?![^>]*\bopen\b)([^>]*)>/gi, "<details$1 open>");
-
-  // Some Health Canada pages use aria-expanded accordions — flip them too
-  html = html.replace(/aria-expanded="false"/gi, 'aria-expanded="true"');
-  html = html.replace(/class="([^"]*\bcollapse\b(?!\s+show)[^"]*)"/gi,
-    (m, cls) => `class="${cls} show"`);
-
-  return html;
+  throw new Error(
+    `Failed to fetch via proxies: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`
+  );
 }
 
-async function renderIframe(html: string): Promise<HTMLIFrameElement> {
-  return new Promise((resolve, reject) => {
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.left = "-10000px";
-    iframe.style.top = "0";
-    iframe.style.width = "1024px";
-    iframe.style.height = "1400px";
-    iframe.style.border = "0";
-    iframe.srcdoc = html;
-    iframe.onload = () => {
-      // Give external CSS/images a moment to load
-      setTimeout(() => resolve(iframe), 1500);
-    };
-    iframe.onerror = () => reject(new Error("iframe load failed"));
-    document.body.appendChild(iframe);
+function buildPdfContainer(rawHtml: string, sourceUrl: string, title: string): HTMLDivElement {
+  // Parse the page so we can pull only the useful content into the main document.
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(rawHtml, "text/html");
+
+  // Force every <details> open
+  doc.querySelectorAll("details").forEach((d) => d.setAttribute("open", ""));
+  // Flip aria-expanded accordions
+  doc.querySelectorAll('[aria-expanded="false"]').forEach((el) =>
+    el.setAttribute("aria-expanded", "true")
+  );
+  // Bootstrap-style collapse
+  doc.querySelectorAll(".collapse").forEach((el) => el.classList.add("show"));
+
+  // Strip elements that break PDF rendering or aren't useful
+  doc
+    .querySelectorAll(
+      'script, noscript, iframe, link[rel="stylesheet"], style, header nav, footer, .wb-bc, #wb-bc, .gc-prtts, .pagedetails, form[role="search"]'
+    )
+    .forEach((el) => el.remove());
+
+  // Pick the main content area; fall back to body
+  const main =
+    doc.querySelector("main") ||
+    doc.querySelector('[role="main"]') ||
+    doc.querySelector("#wb-cont") ||
+    doc.body;
+
+  const container = document.createElement("div");
+  container.style.position = "fixed";
+  container.style.left = "-10000px";
+  container.style.top = "0";
+  container.style.width = "900px";
+  container.style.background = "#ffffff";
+  container.style.color = "#000000";
+  container.style.fontFamily = "Arial, Helvetica, sans-serif";
+  container.style.fontSize = "12px";
+  container.style.lineHeight = "1.5";
+  container.style.padding = "16px";
+
+  const header = document.createElement("div");
+  header.style.marginBottom = "12px";
+  header.style.borderBottom = "1px solid #999";
+  header.style.paddingBottom = "8px";
+  header.innerHTML = `<h1 style="font-size:18px;margin:0 0 6px">${title.replace(/[<>&]/g, "")}</h1>
+    <div style="font-size:10px;color:#444">Source: ${sourceUrl}</div>`;
+  container.appendChild(header);
+
+  // Import the main subtree into the current document so html2canvas can render it
+  container.appendChild(document.importNode(main, true));
+
+  // Rewrite relative image/anchor URLs against the source URL
+  container.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src");
+    if (src && !/^https?:/i.test(src) && !src.startsWith("data:")) {
+      try {
+        img.setAttribute("src", new URL(src, sourceUrl).toString());
+      } catch {}
+    }
+    img.setAttribute("crossorigin", "anonymous");
   });
+
+  document.body.appendChild(container);
+  return container;
+}
+
+async function waitForImages(container: HTMLElement): Promise<void> {
+  const imgs = Array.from(container.querySelectorAll("img"));
+  await Promise.all(
+    imgs.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete) return resolve();
+          img.addEventListener("load", () => resolve(), { once: true });
+          img.addEventListener("error", () => resolve(), { once: true });
+          // safety timeout
+          setTimeout(() => resolve(), 4000);
+        })
+    )
+  );
 }
 
 export async function downloadPageAsPdf(url: string, title: string): Promise<void> {
   const raw = await fetchPageHtml(url);
-  const prepared = prepareHtml(raw, url);
-  const iframe = await renderIframe(prepared);
+  const container = buildPdfContainer(raw, url, title);
 
   try {
-    const doc = iframe.contentDocument;
-    if (!doc) throw new Error("Cannot access iframe document");
+    await waitForImages(container);
 
-    // Defensive: open any remaining details in the live DOM
-    doc.querySelectorAll("details").forEach((d) => d.setAttribute("open", ""));
-
-    const target = doc.body;
     const fileName = `${sanitizeFileName(title) || "health-canada-document"}.pdf`;
 
     await html2pdf()
-      .from(target)
+      .from(container)
       .set({
         margin: 10,
         filename: fileName,
@@ -88,15 +142,16 @@ export async function downloadPageAsPdf(url: string, title: string): Promise<voi
           useCORS: true,
           allowTaint: true,
           logging: false,
-          windowWidth: 1024,
+          backgroundColor: "#ffffff",
+          windowWidth: 900,
         },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         // @ts-ignore - pagebreak is supported at runtime but missing from types
-        pagebreak: { mode: ["css", "legacy"] },
+        pagebreak: { mode: ["css", "legacy", "avoid-all"] },
       } as any)
       .save();
   } finally {
-    iframe.remove();
+    container.remove();
   }
 }
 
