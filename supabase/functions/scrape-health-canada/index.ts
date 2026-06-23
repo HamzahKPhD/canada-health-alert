@@ -7,7 +7,8 @@ const corsHeaders = {
 
 const BASE_URL = 'https://dhpp.hpfb-dgpsa.ca/review-documents';
 const MAX_PAGES = 400;
-const CONCURRENCY = 6;
+const CONCURRENCY = 12;
+const MAX_CONSECUTIVE_EMPTY = 3; // tolerate transient empty pages before stopping
 
 interface ReviewDocument {
   title: string;
@@ -167,41 +168,54 @@ Deno.serve(async (req) => {
     );
 
     const allDocuments: ReviewDocument[] = [];
+    let consecutiveEmpty = 0;
     let stopRequested = false;
 
-    // Scrape all listing pages in parallel batches, stop when an empty page is hit
+    // Scrape all listing pages in parallel batches. Tolerate transient empty pages.
     for (let batchStart = 0; batchStart < MAX_PAGES && !stopRequested; batchStart += CONCURRENCY) {
       const batch = Array.from({ length: CONCURRENCY }, (_, i) => batchStart + i)
         .filter((p) => p < MAX_PAGES);
 
-      const results = await Promise.all(
-        batch.map(async (page) => {
-          const url = page === 0 ? BASE_URL : `${BASE_URL}?page=${page}`;
-          try {
-            const response = await fetch(url, {
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (compatible; HealthCanadaMonitor/1.0)',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              },
-            });
-            if (!response.ok) return { page, docs: [] as ReviewDocument[] };
-            const html = await response.text();
-            return { page, docs: parseDocumentsFromHtml(html) };
-          } catch (err) {
-            console.error(`Error fetching page ${page}:`, err);
-            return { page, docs: [] as ReviewDocument[] };
+      const fetchPage = async (page: number, attempt = 0): Promise<{ page: number; docs: ReviewDocument[] }> => {
+        const url = page === 0 ? BASE_URL : `${BASE_URL}?page=${page}`;
+        try {
+          const response = await fetch(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; HealthCanadaMonitor/1.0)',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+          });
+          if (!response.ok) {
+            if (attempt < 1) return await fetchPage(page, attempt + 1);
+            return { page, docs: [] };
           }
-        })
-      );
+          const html = await response.text();
+          const docs = parseDocumentsFromHtml(html);
+          if (docs.length === 0 && attempt < 1) return await fetchPage(page, attempt + 1);
+          return { page, docs };
+        } catch (err) {
+          if (attempt < 1) return await fetchPage(page, attempt + 1);
+          console.error(`Error fetching page ${page}:`, err);
+          return { page, docs: [] };
+        }
+      };
+
+      const results = await Promise.all(batch.map((p) => fetchPage(p)));
 
       for (const { page, docs } of results.sort((a, b) => a.page - b.page)) {
         if (docs.length === 0) {
-          stopRequested = true;
-          console.log(`Page ${page} empty — stopping pagination.`);
-          break;
+          consecutiveEmpty++;
+          console.log(`Page ${page} empty (consecutive empty: ${consecutiveEmpty}).`);
+          if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+            stopRequested = true;
+            console.log(`Reached ${MAX_CONSECUTIVE_EMPTY} consecutive empty pages — stopping.`);
+            break;
+          }
+        } else {
+          consecutiveEmpty = 0;
+          console.log(`Page ${page}: ${docs.length} docs`);
+          allDocuments.push(...docs);
         }
-        console.log(`Page ${page}: ${docs.length} docs`);
-        allDocuments.push(...docs);
       }
     }
 
