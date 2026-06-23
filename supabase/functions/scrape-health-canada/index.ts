@@ -234,13 +234,14 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Upsert all documents
-    const { error: upsertError } = await supabase
-      .from('review_documents')
-      .upsert(allDocuments, { onConflict: 'url', ignoreDuplicates: true });
-
-    if (upsertError) {
-      console.error('Upsert error:', upsertError);
+    // Upsert all documents (chunked to avoid payload limits)
+    const CHUNK = 500;
+    for (let i = 0; i < allDocuments.length; i += CHUNK) {
+      const slice = allDocuments.slice(i, i + CHUNK);
+      const { error: upsertError } = await supabase
+        .from('review_documents')
+        .upsert(slice, { onConflict: 'url', ignoreDuplicates: true });
+      if (upsertError) console.error('Upsert error:', upsertError);
     }
 
     // Fetch indication summaries for documents that don't have one yet
